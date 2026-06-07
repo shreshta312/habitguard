@@ -4,6 +4,7 @@ from app.services.dataset_service import DatasetService
 from pydantic import BaseModel
 from app.services.anomaly_service import AnomalyService
 from app.services.risk_service import RiskService
+from app.services.segment_service import SegmentService
 
 app = FastAPI(
     title="HabitGuard API",
@@ -18,6 +19,7 @@ dataset_service = DatasetService(CSV_PATH)
 df = dataset_service.load_data()
 anomaly_service = AnomalyService()
 risk_service = RiskService()
+segment_service = SegmentService()
 
 class AnomalyRequest(BaseModel):
     screen_time_min: float
@@ -114,3 +116,23 @@ def predict_risk(request: RiskRequest):
     }
 
     return risk_service.predict_risk(features)
+
+@app.post("/segment/predict")
+def predict_segment(request: RiskRequest):
+    features = {
+        "age": request.age,
+        "daily_screen_time_hours": request.daily_screen_time_hours,
+        "social_media_hours": request.social_media_hours,
+        "gaming_hours": request.gaming_hours,
+        "work_study_hours": request.work_study_hours,
+        "sleep_hours": request.sleep_hours,
+        "notifications_per_day": request.notifications_per_day,
+        "app_opens_per_day": request.app_opens_per_day,
+        "weekend_screen_time": request.weekend_screen_time,
+        "stress_level": request.stress_level,
+        "academic_work_impact": request.academic_work_impact,
+        "gender_male": request.gender_male,
+        "gender_other": request.gender_other,
+    }
+
+    return segment_service.predict_segment(features)
