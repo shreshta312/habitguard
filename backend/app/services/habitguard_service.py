@@ -58,3 +58,48 @@ class HabitGuardService:
             "today_usage": daily_usage_history[-1],
             "friction_action": friction
         }
+
+    def get_user_app_summary(self, user_id, app_name):
+        df = self.dataset_service.load_data()
+
+        usage_history = self.dataset_service.get_user_app_usage(
+            df,
+            user_id,
+            app_name
+        )
+
+        if len(usage_history) == 0:
+            return {
+                "user_id": user_id,
+                "app_name": app_name,
+                "error": "No usage data found for this user and app"
+            }
+
+        addiction_scores = self.addiction_engine.calculate_scores(
+            usage_history
+        )
+
+        current_score = self.addiction_engine.current_score(
+            usage_history
+        )
+
+        score_level = self.addiction_engine.score_level(current_score)
+
+        recommended_limit = self.limit_engine.recommend_limit(current_score)
+
+        friction = self.limit_engine.friction_action(
+            usage_today=usage_history[-1],
+            recommended_limit=recommended_limit
+        )
+
+        return {
+            "user_id": user_id,
+            "app_name": app_name,
+            "usage_history": usage_history,
+            "addiction_scores": addiction_scores,
+            "current_score": current_score,
+            "score_level": score_level,
+            "recommended_limit": recommended_limit,
+            "today_usage": usage_history[-1],
+            "friction_action": friction
+        }
