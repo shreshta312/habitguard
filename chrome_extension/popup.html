@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8" />
+  <title>HabitGuard</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+
+<body>
+  <div class="container">
+    <h1>HabitGuard</h1>
+
+    <div class="card">
+      <p class="label">Status</p>
+      <p id="usageStatus" class="value">Loading...</p>
+    </div>
+
+    <div class="card">
+      <p class="label">Friction</p>
+      <p id="frictionType" class="value">Loading...</p>
+    </div>
+
+    <div class="card">
+      <p class="label">Recommended Timer</p>
+      <p id="timer" class="value">Loading...</p>
+    </div>
+
+    <p id="message" class="message">Checking your usage pattern...</p>
+
+    <button id="refreshBtn">Refresh</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>
