@@ -6,8 +6,21 @@ class AddictionEngine:
 
     where:
     s(t) = current addiction stock
-    x(t) = usage at time t
+    x(t) = usage at time t (in minutes)
     rho  = habit formation strength
+
+    Note on rho:
+    The paper reports rho = 0.299 over a 21-day experimental period.
+    This engine receives daily usage values, so rho here is used as a
+    heuristic signal for friction and limit decisions — not as a
+    structurally grounded daily estimate. For structurally grounded
+    daily habit stock, see StructuralTimerEngine which converts rho
+    to a daily reference and further personalizes it per user.
+
+    Score level thresholds (LOW / MODERATE / HIGH / SEVERE) are
+    calibrated against observed score distributions on the Kaggle
+    screen-time dataset used in this project. They are not derived
+    from the paper.
     """
 
     def __init__(self, rho=0.299):
@@ -15,7 +28,7 @@ class AddictionEngine:
 
     def calculate_scores(self, usage_history):
         """
-        usage_history: list of daily usage values in minutes
+        usage_history: list of daily usage values in minutes.
 
         Example:
         [45, 52, 48, 61, 70]
@@ -47,6 +60,9 @@ class AddictionEngine:
     def score_level(self, score):
         """
         Converts numerical addiction score into readable level.
+
+        Thresholds calibrated against score distributions observed
+        on the project dataset. Not derived from paper parameters.
         """
 
         if score < 10:

@@ -9,11 +9,18 @@ SCALER_PATH = Path("../ml/saved_models/anomaly_scaler.pkl")
 
 class AnomalyService:
     def __init__(self):
-        with open(MODEL_PATH, "rb") as file:
-            self.model = pickle.load(file)
+        try:
+            with open(MODEL_PATH, "rb") as file:
+                self.model = pickle.load(file)
 
-        with open(SCALER_PATH, "rb") as file:
-            self.scaler = pickle.load(file)
+            with open(SCALER_PATH, "rb") as file:
+                self.scaler = pickle.load(file)
+
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                f"AnomalyService failed to load model files: {e}. "
+                f"Expected at {MODEL_PATH} and {SCALER_PATH}."
+            )
 
     def detect_anomaly(self, screen_time_min, launches, interactions, is_productive):
         sample = pd.DataFrame([{

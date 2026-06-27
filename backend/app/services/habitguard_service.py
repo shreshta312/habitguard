@@ -10,15 +10,32 @@ class HabitGuardService:
     - addiction score calculation
     - dynamic limit recommendation
     - friction decision
+
+    Note: df is loaded once at FastAPI startup in main.py and passed
+    into service methods directly. Methods here call load_data() only
+    when invoked standalone (e.g. tests). In production, the df loaded
+    at startup is used via the dataset_service passed to each method.
     """
 
     def __init__(self, csv_path):
         self.dataset_service = DatasetService(csv_path)
         self.addiction_engine = AddictionEngine()
         self.limit_engine = DynamicLimitEngine()
+        self._df = None
+
+    def _get_df(self):
+        """
+        Returns a cached DataFrame. Loads from disk only on first call.
+        Prevents re-reading the CSV on every API request.
+        """
+
+        if self._df is None:
+            self._df = self.dataset_service.load_data()
+
+        return self._df
 
     def get_user_daily_summary(self, user_id):
-        df = self.dataset_service.load_data()
+        df = self._get_df()
 
         daily_usage_history = self.dataset_service.get_user_daily_total_usage(
             df,
@@ -35,12 +52,8 @@ class HabitGuardService:
             daily_usage_history
         )
 
-        current_score = self.addiction_engine.current_score(
-            daily_usage_history
-        )
-
+        current_score = self.addiction_engine.current_score(daily_usage_history)
         score_level = self.addiction_engine.score_level(current_score)
-
         recommended_limit = self.limit_engine.recommend_limit(current_score)
 
         friction = self.limit_engine.friction_action(
@@ -60,7 +73,7 @@ class HabitGuardService:
         }
 
     def get_user_app_summary(self, user_id, app_name):
-        df = self.dataset_service.load_data()
+        df = self._get_df()
 
         usage_history = self.dataset_service.get_user_app_usage(
             df,
@@ -75,16 +88,9 @@ class HabitGuardService:
                 "error": "No usage data found for this user and app"
             }
 
-        addiction_scores = self.addiction_engine.calculate_scores(
-            usage_history
-        )
-
-        current_score = self.addiction_engine.current_score(
-            usage_history
-        )
-
+        addiction_scores = self.addiction_engine.calculate_scores(usage_history)
+        current_score = self.addiction_engine.current_score(usage_history)
         score_level = self.addiction_engine.score_level(current_score)
-
         recommended_limit = self.limit_engine.recommend_limit(current_score)
 
         friction = self.limit_engine.friction_action(

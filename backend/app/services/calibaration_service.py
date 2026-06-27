@@ -1,3 +1,8 @@
+# NOTE: This module is superseded by the calibration logic inside
+# StructuralTimerEngine.get_calibration_status(). It is retained here
+# for reference only and is not imported anywhere in the active codebase.
+
+
 def get_calibration_status(user_usage_history, min_days=10):
     """
     user_usage_history: list of daily usage values

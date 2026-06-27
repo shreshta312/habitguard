@@ -1,12 +1,30 @@
 class StructuralTimerEngine:
     """
-    User-calibrated timer engine inspired by the Digital Addiction paper.
+    User-calibrated timer engine grounded in the Digital Addiction paper
+    (Allcott, Gentzkow & Song, 2022).
 
-    Important:
+    Parameter personalization status:
+    - rho_user   : estimated from user behavior via lag-1 autocorrelation.
+    - xi_user    : derived from user baseline + rho_user.
+    - baseline   : computed from the first calibration_days of usage.
+    - habit stock: computed from user data using rho_user.
+    - eta, zeta, gamma : still paper priors. These require intervention-
+                         response data (eta), longer usage history (zeta),
+                         and behavioral signals like timer crossings and
+                         session restarts (gamma) before they can be
+                         personalized. Proxy estimation will be added in
+                         a later stage once Chrome extension data is live.
+
+    Unit convention:
     - Input usage_history is in minutes.
-    - Structural calculations are done in hours.
+    - All structural calculations are done in hours.
     - Output timer is converted back to minutes.
-    - First calibration_days are used only to build user baseline.
+
+    Timer control rule:
+    - recommended_target_usage_minutes is the structural model output.
+    - recommended_timer_minutes is the actual intervention timer shown
+      to the user. These are kept separate because high habit stock
+      should make the timer stricter, not more relaxed.
     """
 
     def __init__(
@@ -22,8 +40,19 @@ class StructuralTimerEngine:
         max_timer_minutes=180
     ):
         self.rho_paper = rho_paper
+
+        # rho_paper is a 21-day aggregate from the paper's experiment.
+        # Converting to a daily reference for internal comparison only.
+        # rho_user replaces this in all actual calculations.
         self.rho_daily_reference = rho_paper ** (1 / paper_period_days)
 
+        # eta, zeta, gamma are paper priors.
+        # eta   : marginal utility of usage. Requires intervention-response
+        #         data to personalize (how usage changes under timer pressure).
+        # zeta  : habit stock influence on current usage. Can be approximated
+        #         from longer passive history in a future stage.
+        # gamma : temptation / self-control gap. Requires behavioral signals
+        #         (timer crossings, session restarts) from Chrome extension.
         self.eta = eta
         self.zeta = zeta
         self.gamma = gamma
@@ -38,10 +67,11 @@ class StructuralTimerEngine:
 
     def calculate_rho_user(self, usage_history_hours):
         """
-        Estimate user-specific persistence using lag-1 autocorrelation.
+        Estimates user-specific habit persistence via lag-1 autocorrelation.
 
-        This is a behavioral persistence proxy, not the paper's exact
-        experimentally estimated rho.
+        Asks: does today's usage predict tomorrow's usage?
+        This is a behavioral proxy, not the paper's experimentally
+        estimated rho. Clamped to [0.05, 0.95] to keep persistence stable.
         """
 
         if len(usage_history_hours) < 3:
@@ -66,14 +96,13 @@ class StructuralTimerEngine:
 
         rho = numerator / ((denominator_x * denominator_y) ** 0.5)
 
-        # Keep habit persistence stable.
         rho = max(0.05, min(0.95, rho))
 
         return rho
 
     def calculate_habit_stock_history(self, usage_history_hours, rho_user):
         """
-        Computes user-calibrated habit stock.
+        Computes user-calibrated habit stock history.
 
         S_t = rho_user * (S_{t-1} + x_{t-1})
         """
@@ -89,7 +118,7 @@ class StructuralTimerEngine:
 
     def calculate_baseline_usage(self, usage_history_hours):
         """
-        Baseline is calculated from the first calibration_days.
+        Baseline is the mean of the first calibration_days of usage.
         """
 
         calibration_window = usage_history_hours[:self.calibration_days]
@@ -101,7 +130,8 @@ class StructuralTimerEngine:
 
     def calculate_recent_usage(self, usage_history_hours, recent_days=3):
         """
-        Recent usage captures current behavior after baseline.
+        Recent usage is the mean of the last recent_days of usage.
+        Captures current behavior after baseline has been established.
         """
 
         recent_window = usage_history_hours[-recent_days:]
@@ -113,12 +143,14 @@ class StructuralTimerEngine:
 
     def calculate_xi_user(self, baseline_usage_hours, rho_user):
         """
-        Adapted xi calibration:
+        Computes user-calibrated xi, the preference parameter from the paper.
 
-        xi_i = p - gamma + x_baseline * (-eta - (zeta*rho)/(1-rho))
+        Derived by inverting the paper's steady-state equation at the
+        user's observed baseline usage:
 
-        Here rho is user-calibrated persistence.
-        Eta, zeta, and gamma are still paper priors for now.
+            xi_i = p - gamma + x_baseline * (-eta - (zeta * rho) / (1 - rho))
+
+        rho is user-estimated. eta, zeta, gamma remain paper priors.
         """
 
         denominator_adjustment = (
@@ -136,9 +168,11 @@ class StructuralTimerEngine:
 
     def predict_natural_usage_hours(self, habit_stock, xi_user):
         """
-        Model-implied natural usage:
+        Model-implied natural (unconstrained) usage given current habit stock.
 
-        x_actual = (zeta*S + xi - p + gamma) / (-eta)
+        x_actual = (zeta * S + xi - p + gamma) / (-eta)
+
+        Includes gamma because this is usage without self-control applied.
         """
 
         x_actual = (
@@ -152,9 +186,11 @@ class StructuralTimerEngine:
 
     def recommend_target_usage_hours(self, habit_stock, xi_user):
         """
-        Model-implied self-control target usage:
+        Model-implied self-control target usage given current habit stock.
 
-        x_target = (zeta*S + xi - p) / (-eta)
+        x_target = (zeta * S + xi - p) / (-eta)
+
+        Excludes gamma because this is usage with self-control applied.
         """
 
         x_target = (
@@ -182,20 +218,29 @@ class StructuralTimerEngine:
         temptation_gap_minutes
     ):
         """
-        Safe timer control rule.
+        Computes the final intervention timer using a bounded control rule.
 
-        Important distinction:
-        - recommended_target_usage_minutes is the structural model output.
-        - recommended_timer_minutes is the actual intervention timer.
+        The timer is derived by reducing from baseline proportionally to:
+        - overuse_gap         (weight 0.35): how far recent usage exceeds
+                               baseline. Largest weight because it is the
+                               most direct signal of current over-usage.
+        - temptation_gap      (weight 0.15): structural gap between natural
+                               and target usage. Reflects paper-implied
+                               self-control pressure.
+        - habit_stock pressure (weight 0.10): normalized habit stock scaled
+                               by baseline. Ensures that high accumulated
+                               habit stock tightens the timer rather than
+                               relaxing it.
 
-        The timer should not become more relaxed simply because habit stock is high.
-        High habit stock should make the intervention stricter, not looser.
+        Result is clamped to [min_timer_minutes, max_timer_minutes].
         """
 
         overuse_gap = max(0, recent_usage_minutes - baseline_usage_minutes)
 
         baseline_hours = baseline_usage_minutes / 60
 
+        # Normalize habit stock relative to baseline to make it scale-invariant.
+        # Capped at 2.0 to prevent extreme habit stock from dominating.
         normalized_habit_pressure = habit_stock / (baseline_hours + 1)
         normalized_habit_pressure = min(normalized_habit_pressure, 2.0)
 
@@ -249,14 +294,8 @@ class StructuralTimerEngine:
 
         usage_history_hours = self.minutes_to_hours(usage_history_minutes)
 
-        baseline_usage_hours = self.calculate_baseline_usage(
-            usage_history_hours
-        )
-
-        recent_usage_hours = self.calculate_recent_usage(
-            usage_history_hours
-        )
-
+        baseline_usage_hours = self.calculate_baseline_usage(usage_history_hours)
+        recent_usage_hours = self.calculate_recent_usage(usage_history_hours)
         rho_user = self.calculate_rho_user(usage_history_hours)
 
         habit_stock_history = self.calculate_habit_stock_history(
@@ -266,10 +305,7 @@ class StructuralTimerEngine:
 
         current_habit_stock = habit_stock_history[-1]
 
-        xi_user = self.calculate_xi_user(
-            baseline_usage_hours,
-            rho_user
-        )
+        xi_user = self.calculate_xi_user(baseline_usage_hours, rho_user)
 
         predicted_natural_usage_hours_raw = self.predict_natural_usage_hours(
             current_habit_stock,
@@ -281,18 +317,14 @@ class StructuralTimerEngine:
             xi_user
         )
 
+        # Track whether predictions went negative before clamping.
+        # Frequent negatives signal the model may be miscalibrated for
+        # this user's usage range and should be monitored.
         natural_was_negative = predicted_natural_usage_hours_raw < 0
         target_was_negative = recommended_target_usage_hours_raw < 0
 
-        predicted_natural_usage_hours = max(
-            predicted_natural_usage_hours_raw,
-            0
-        )
-
-        recommended_target_usage_hours = max(
-            recommended_target_usage_hours_raw,
-            0
-        )
+        predicted_natural_usage_hours = max(predicted_natural_usage_hours_raw, 0)
+        recommended_target_usage_hours = max(recommended_target_usage_hours_raw, 0)
 
         predicted_natural_usage_minutes = predicted_natural_usage_hours * 60
         recommended_target_usage_minutes = recommended_target_usage_hours * 60
@@ -305,10 +337,7 @@ class StructuralTimerEngine:
         baseline_usage_minutes = baseline_usage_hours * 60
         recent_usage_minutes = recent_usage_hours * 60
 
-        overuse_gap_minutes = max(
-            0,
-            recent_usage_minutes - baseline_usage_minutes
-        )
+        overuse_gap_minutes = max(0, recent_usage_minutes - baseline_usage_minutes)
 
         recommended_timer_minutes = self.calculate_safe_timer_minutes(
             baseline_usage_minutes=baseline_usage_minutes,
@@ -341,36 +370,23 @@ class StructuralTimerEngine:
             "habit_stock_history": habit_stock_history,
             "current_habit_stock": round(current_habit_stock, 4),
 
-            "predicted_natural_usage_minutes": round(
-                predicted_natural_usage_minutes,
-                2
-            ),
-
-            "recommended_target_usage_minutes": round(
-                recommended_target_usage_minutes,
-                2
-            ),
-
-            "recommended_timer_minutes": round(
-                recommended_timer_minutes,
-                2
-            ),
-
-            "temptation_gap_minutes": round(
-                temptation_gap_minutes,
-                2
-            ),
+            "predicted_natural_usage_minutes": round(predicted_natural_usage_minutes, 2),
+            "recommended_target_usage_minutes": round(recommended_target_usage_minutes, 2),
+            "recommended_timer_minutes": round(recommended_timer_minutes, 2),
+            "temptation_gap_minutes": round(temptation_gap_minutes, 2),
 
             "natural_was_negative": natural_was_negative,
             "target_was_negative": target_was_negative,
 
             "interpretation": (
                 "The first calibration window is used to estimate the user's "
-                "baseline. User-specific rho is estimated from usage persistence. "
-                "The structural model produces natural usage and target usage. "
-                "The final recommended timer uses a safe bounded control rule so "
-                "that high habit stock makes the timer stricter, not more relaxed. "
-                "Eta, zeta, and gamma are still priors until intention and "
-                "intervention-response data are collected."
+                "baseline. rho_user is estimated from lag-1 autocorrelation of "
+                "usage history. xi_user is derived from baseline and rho_user. "
+                "eta, zeta, and gamma remain paper priors: eta requires "
+                "intervention-response data, zeta can be approximated from longer "
+                "passive history, gamma requires Chrome extension behavioral signals "
+                "(timer crossings, session restarts). The final timer uses a safe "
+                "bounded control rule so that high habit stock tightens the timer "
+                "rather than relaxing it."
             )
         }

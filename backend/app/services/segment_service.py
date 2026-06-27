@@ -8,10 +8,24 @@ MODEL_PATH = Path("../ml/saved_models/user_segmentation.pkl")
 
 class SegmentService:
     def __init__(self):
-        with open(MODEL_PATH, "rb") as file:
-            self.model = pickle.load(file)
+        try:
+            with open(MODEL_PATH, "rb") as file:
+                self.model = pickle.load(file)
+
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                f"SegmentService failed to load model file: {e}. "
+                f"Expected at {MODEL_PATH}."
+            )
 
     def get_segment_name(self, features):
+        """
+        Heuristic segment label based on scaled feature values.
+
+        Thresholds (0.8, 0.5, -0.8) are relative to the standard-scaled
+        feature space used during model training. These are not raw hours.
+        """
+
         if features["daily_screen_time_hours"] > 0.8 and features["social_media_hours"] > 0.8:
             return "Heavy Social User"
 

@@ -8,8 +8,15 @@ MODEL_PATH = Path("../ml/saved_models/risk_classifier.pkl")
 
 class RiskService:
     def __init__(self):
-        with open(MODEL_PATH, "rb") as file:
-            self.model = pickle.load(file)
+        try:
+            with open(MODEL_PATH, "rb") as file:
+                self.model = pickle.load(file)
+
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                f"RiskService failed to load model file: {e}. "
+                f"Expected at {MODEL_PATH}."
+            )
 
     def predict_risk(self, features):
         sample = pd.DataFrame([features])

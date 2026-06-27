@@ -31,7 +31,7 @@ class DatasetService:
 
     def get_user_app_usage(self, df, user_id, app_name):
         """
-        Returns usage history for one user and one app.
+        Returns usage history for one user and one app, sorted by date.
         """
 
         filtered_df = df[
@@ -45,8 +45,10 @@ class DatasetService:
 
     def get_user_daily_total_usage(self, df, user_id):
         """
-        Combines all app usage per day for one user.
-        This gives a better addiction trajectory than app-level usage.
+        Sums all app usage per day for one user, sorted by date.
+
+        Returns daily totals rather than per-app values because the
+        addiction trajectory is better captured at the whole-device level.
         """
 
         user_df = df[df["user_id"].astype(str) == str(user_id)]

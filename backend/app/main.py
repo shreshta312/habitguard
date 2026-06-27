@@ -1,10 +1,12 @@
 from fastapi import FastAPI
+from pydantic import BaseModel
 from app.services.habitguard_service import HabitGuardService
 from app.services.dataset_service import DatasetService
-from pydantic import BaseModel
 from app.services.anomaly_service import AnomalyService
 from app.services.risk_service import RiskService
 from app.services.segment_service import SegmentService
+from app.services.structural_timer_engine import StructuralTimerEngine
+
 
 app = FastAPI(
     title="HabitGuard API",
@@ -20,12 +22,15 @@ df = dataset_service.load_data()
 anomaly_service = AnomalyService()
 risk_service = RiskService()
 segment_service = SegmentService()
+structural_timer_engine = StructuralTimerEngine()
+
 
 class AnomalyRequest(BaseModel):
     screen_time_min: float
     launches: int
     interactions: int
     is_productive: int
+
 
 class RiskRequest(BaseModel):
     age: float
@@ -41,6 +46,61 @@ class RiskRequest(BaseModel):
     academic_work_impact: float
     gender_male: float
     gender_other: float
+
+
+class CustomUsageRequest(BaseModel):
+    usage_history_minutes: list[float]
+
+
+def _build_intervention_response(timer_result, extra_fields=None):
+    """
+    Shared logic for mapping a structural timer result to an intervention response.
+
+    Used by both the user-specific and custom intervention endpoints to avoid
+    duplicating the overuse_gap threshold logic.
+    """
+
+    overuse_gap = timer_result.get("overuse_gap_minutes", 0)
+    recommended_timer = round(timer_result.get("recommended_timer_minutes", 0))
+
+    if overuse_gap == 0:
+        usage_status = "STABLE"
+        friction_type = "NONE"
+        message = "Your usage is close to your baseline. No intervention needed right now."
+
+    elif overuse_gap <= 10:
+        usage_status = "SLIGHTLY_ABOVE_BASELINE"
+        friction_type = "SOFT_WARNING"
+        message = "Your usage is slightly above your normal pattern. Consider taking a short break."
+
+    elif overuse_gap <= 30:
+        usage_status = "HIGH_USAGE"
+        friction_type = "TIMER_WARNING"
+        message = "Your usage is noticeably above baseline. A timer limit is recommended."
+
+    else:
+        usage_status = "RISKY_USAGE_SPIKE"
+        friction_type = "STRONG_FRICTION"
+        message = "Your usage is much higher than usual. A stricter break or blocking intervention is recommended."
+
+    response = {
+        "mode": timer_result.get("mode"),
+        "timer_active": timer_result.get("timer_active"),
+        "usage_status": usage_status,
+        "friction_type": friction_type,
+        "recommended_timer_minutes": recommended_timer,
+        "overuse_gap_minutes": overuse_gap,
+        "baseline_usage_minutes": timer_result.get("baseline_usage_minutes"),
+        "recent_usage_minutes": timer_result.get("recent_usage_minutes"),
+        "rho_user": timer_result.get("rho_user"),
+        "message": message
+    }
+
+    if extra_fields:
+        response = {**extra_fields, **response}
+
+    return response
+
 
 @app.get("/")
 def home():
@@ -84,9 +144,11 @@ def get_user_apps(user_id: int):
 def get_user_summary(user_id: int):
     return habitguard_service.get_user_daily_summary(user_id)
 
+
 @app.get("/users/{user_id}/apps/{app_name}/summary")
 def get_user_app_summary(user_id: int, app_name: str):
     return habitguard_service.get_user_app_summary(user_id, app_name)
+
 
 @app.post("/anomaly/check")
 def check_anomaly(request: AnomalyRequest):
@@ -96,6 +158,7 @@ def check_anomaly(request: AnomalyRequest):
         interactions=request.interactions,
         is_productive=request.is_productive
     )
+
 
 @app.post("/risk/predict")
 def predict_risk(request: RiskRequest):
@@ -117,6 +180,7 @@ def predict_risk(request: RiskRequest):
 
     return risk_service.predict_risk(features)
 
+
 @app.post("/segment/predict")
 def predict_segment(request: RiskRequest):
     features = {
@@ -136,3 +200,81 @@ def predict_segment(request: RiskRequest):
     }
 
     return segment_service.predict_segment(features)
+
+
+@app.get("/habitguard/user/{user_id}/timer")
+def get_structural_timer(user_id: int):
+    # Use daily totals, not raw per-row screen_time_min values.
+    # A user with multiple apps per day would otherwise produce multiple
+    # entries per day, which the engine would treat as separate days.
+    # DatasetService compares user_id as string internally, so the
+    # existence check is done against the resulting list, not the raw df.
+    usage_history = dataset_service.get_user_daily_total_usage(df, user_id)
+
+    if len(usage_history) == 0:
+        return {
+            "user_id": user_id,
+            "error": "User not found or no usage data available"
+        }
+
+    result = structural_timer_engine.get_structural_timer_summary(
+        usage_history_minutes=usage_history
+    )
+
+    return {
+        "user_id": user_id,
+        "structural_timer": result
+    }
+
+
+@app.get("/habitguard/user/{user_id}/intervention")
+def get_user_intervention(user_id: int):
+    # Use daily totals for the same reason as the timer endpoint above.
+    usage_history = dataset_service.get_user_daily_total_usage(df, user_id)
+
+    if len(usage_history) == 0:
+        return {
+            "user_id": user_id,
+            "error": "User not found or no usage data available"
+        }
+
+    timer_result = structural_timer_engine.get_structural_timer_summary(
+        usage_history_minutes=usage_history
+    )
+
+    if timer_result.get("mode") == "CALIBRATION":
+        return {
+            "user_id": user_id,
+            "mode": "CALIBRATION",
+            "timer_active": False,
+            "usage_status": "COLLECTING_BASELINE",
+            "friction_type": "NONE",
+            "recommended_timer_minutes": None,
+            "message": timer_result.get("message")
+        }
+
+    return _build_intervention_response(
+        timer_result,
+        extra_fields={"user_id": user_id}
+    )
+
+
+@app.post("/habitguard/custom/intervention")
+def get_custom_intervention(request: CustomUsageRequest):
+    usage_history = request.usage_history_minutes
+
+    timer_result = structural_timer_engine.get_structural_timer_summary(
+        usage_history_minutes=usage_history
+    )
+
+    if timer_result.get("mode") == "CALIBRATION":
+        return {
+            "mode": "CALIBRATION",
+            "timer_active": False,
+            "usage_status": "COLLECTING_BASELINE",
+            "friction_type": "NONE",
+            "recommended_timer_minutes": None,
+            "message": timer_result.get("message")
+        }
+
+    return _build_intervention_response(timer_result)
