@@ -8,6 +8,8 @@ body {
 
 .container {
   padding: 16px;
+  padding-bottom: 20px;
+  min-height: 100px;
 }
 
 h1 {
@@ -42,6 +44,10 @@ button {
 
 button:hover {
   background: #1d4ed8;
+}
+button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
 }
 
 .card {

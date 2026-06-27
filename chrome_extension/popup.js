@@ -11,6 +11,8 @@ const highBtn = document.getElementById("highBtn");
 const riskyBtn = document.getElementById("riskyBtn");
 const calibrationBtn = document.getElementById("calibrationBtn");
 
+const allButtons = [stableBtn, highBtn, riskyBtn, calibrationBtn];
+
 const usageSamples = {
   stable: [
     30, 32, 31, 29, 33,
@@ -35,7 +37,15 @@ const usageSamples = {
   ]
 };
 
+function setButtonsEnabled(enabled) {
+  allButtons.forEach((button) => {
+    button.disabled = !enabled;
+  });
+}
+
 function setLoading(label) {
+  setButtonsEnabled(false);
+
   usageStatusEl.textContent = "Loading...";
   frictionTypeEl.textContent = "Loading...";
   timerEl.textContent = "Loading...";
@@ -53,7 +63,17 @@ function renderResult(data) {
     return;
   }
 
-  usageStatusEl.textContent = data.usage_status || data.mode || "UNKNOWN";
+  if (data.mode === "CALIBRATION") {
+    usageStatusEl.textContent = "CALIBRATING";
+    frictionTypeEl.textContent = "Not active";
+    timerEl.textContent = "Not active";
+    usageDetailsEl.textContent = "Baseline still being collected.";
+    messageEl.textContent =
+      data.message || "HabitGuard is still collecting baseline data.";
+    return;
+  }
+
+  usageStatusEl.textContent = data.usage_status || "UNKNOWN";
   frictionTypeEl.textContent = data.friction_type || "NONE";
 
   if (
@@ -112,6 +132,8 @@ async function sendUsageHistory(label, usageHistory) {
       "Could not connect to HabitGuard backend. Make sure FastAPI is running.";
 
     console.error(error);
+  } finally {
+    setButtonsEnabled(true);
   }
 }
 
@@ -130,5 +152,3 @@ riskyBtn.addEventListener("click", () => {
 calibrationBtn.addEventListener("click", () => {
   sendUsageHistory("Calibration", usageSamples.calibration);
 });
-
-sendUsageHistory("High Usage", usageSamples.high);

@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "description": "Personalized digital wellbeing intervention assistant.",
   "permissions": [
-    "storage"
+    "storage",
+    "activeTab",
+    "tabs"
   ],
   "host_permissions": [
     "http://127.0.0.1:8000/*"
