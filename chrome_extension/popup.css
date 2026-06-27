@@ -3,7 +3,7 @@ body {
   font-family: Arial, sans-serif;
   background: #f4f7fb;
   color: #1f2937;
-  width: 320px;
+  width: 340px;
 }
 
 .container {
@@ -12,8 +12,36 @@ body {
 
 h1 {
   font-size: 22px;
-  margin: 0 0 16px;
+  margin: 0;
   color: #111827;
+}
+
+.subtitle {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 4px 0 14px;
+}
+
+.button-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+button {
+  border: none;
+  background: #2563eb;
+  color: white;
+  padding: 9px;
+  border-radius: 10px;
+  font-weight: bold;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+button:hover {
+  background: #1d4ed8;
 }
 
 .card {
@@ -22,6 +50,10 @@ h1 {
   padding: 12px;
   margin-bottom: 10px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.small-card {
+  padding: 10px 12px;
 }
 
 .label {
@@ -36,25 +68,16 @@ h1 {
   margin: 0;
 }
 
+.details {
+  font-size: 13px;
+  margin: 0;
+  line-height: 1.4;
+}
+
 .message {
   font-size: 14px;
   background: #eef2ff;
   padding: 10px;
   border-radius: 10px;
   line-height: 1.4;
-}
-
-button {
-  width: 100%;
-  border: none;
-  background: #2563eb;
-  color: white;
-  padding: 10px;
-  border-radius: 10px;
-  font-weight: bold;
-  cursor: pointer;
-}
-
-button:hover {
-  background: #1d4ed8;
 }

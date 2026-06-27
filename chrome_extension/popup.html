@@ -11,24 +11,38 @@
   <div class="container">
     <h1>HabitGuard</h1>
 
+    <p class="subtitle">Custom usage intervention demo</p>
+
+    <div class="button-grid">
+      <button id="stableBtn">Stable</button>
+      <button id="highBtn">High Usage</button>
+      <button id="riskyBtn">Risky Spike</button>
+      <button id="calibrationBtn">Calibration</button>
+    </div>
+
     <div class="card">
       <p class="label">Status</p>
-      <p id="usageStatus" class="value">Loading...</p>
+      <p id="usageStatus" class="value">Waiting...</p>
     </div>
 
     <div class="card">
       <p class="label">Friction</p>
-      <p id="frictionType" class="value">Loading...</p>
+      <p id="frictionType" class="value">Waiting...</p>
     </div>
 
     <div class="card">
       <p class="label">Recommended Timer</p>
-      <p id="timer" class="value">Loading...</p>
+      <p id="timer" class="value">Waiting...</p>
     </div>
 
-    <p id="message" class="message">Checking your usage pattern...</p>
+    <div class="card small-card">
+      <p class="label">Baseline / Recent / Overuse</p>
+      <p id="usageDetails" class="details">Waiting for input...</p>
+    </div>
 
-    <button id="refreshBtn">Refresh</button>
+    <p id="message" class="message">
+      Select a usage pattern to test HabitGuard intervention.
+    </p>
   </div>
 
   <script src="popup.js"></script>
