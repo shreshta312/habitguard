@@ -236,6 +236,8 @@ async function analyzeUsage() {
 
   try {
     const usageHistory = await getDailyUsageHistory();
+    const stored = await getStoredUsage();
+    const todayKey = getTodayKey();
 
     if (usageHistory.length === 0) {
       usageStatusEl.textContent = "NO_DATA";
@@ -253,10 +255,14 @@ async function analyzeUsage() {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        // TODO: extend this payload to include per-domain and per-category
-        // breakdown so the backend can weight temptation-site usage differently
-        // from productive-site usage in the intervention decision.
-        usage_history_minutes: usageHistory
+        usage_history_minutes: usageHistory,
+        context: {
+          current_domain: stored.currentSession?.domain || null,
+          current_category: stored.currentSession?.category || null,
+          session_minutes: stored.currentSession?.sessionMinutes || 0,
+          top_domains: stored.domainUsageMinutes[todayKey] || {},
+          timestamp: Date.now()
+        }
       })
     });
 

@@ -389,13 +389,30 @@ async function runJitaiCheck() {
 
     if (usageHistory.length === 0) return;
 
+    const todayKey = getTodayKey();
+
+    const storedContext = await chrome.storage.local.get([
+      "currentSession",
+      "domainUsageMinutes"
+    ]);
+
+    const currentSession = storedContext.currentSession || null;
+    const domainUsageMinutes = storedContext.domainUsageMinutes || {};
+
     const response = await fetch(API_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        usage_history_minutes: usageHistory
+        usage_history_minutes: usageHistory,
+        context: {
+          current_domain: currentSession?.domain || null,
+          current_category: currentSession?.category || null,
+          session_minutes: currentSession?.sessionMinutes || 0,
+          top_domains: domainUsageMinutes[todayKey] || {},
+          timestamp: Date.now()
+        }
       })
     });
 
@@ -415,23 +432,22 @@ async function runJitaiCheck() {
     if (shouldTriggerNotification(intervention)) {
       await showInterventionNotification(intervention);
     }
-    const stored = await chrome.storage.local.get(["currentSession"]);
-    const currentSession = stored.currentSession || null;
 
     if (shouldTriggerOverlay(intervention, currentSession)) {
       const overlayCooldownActive = await isOverlayCooldownActive();
+
       if (!overlayCooldownActive) {
         await sendOverlayToActiveTab(intervention, currentSession);
       }
     }
 
     debugLog("HabitGuard JITAI check:", intervention);
+
   } catch (error) {
     console.error("HabitGuard JITAI check failed:", error);
   } finally {
     jitaiRunning = false;
   }
-
 }
 
 async function startAlarms() {
