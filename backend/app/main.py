@@ -6,6 +6,10 @@ from app.services.anomaly_service import AnomalyService
 from app.services.risk_service import RiskService
 from app.services.segment_service import SegmentService
 from app.services.structural_timer_engine import StructuralTimerEngine
+from app.services.decision_engine import DecisionEngine
+
+structural_timer_engine = StructuralTimerEngine()
+decision_engine = DecisionEngine()
 
 
 app = FastAPI(
@@ -73,55 +77,24 @@ class CustomUsageRequest(BaseModel):
     context: ContextRequest | None = None
 
 
-def _build_intervention_response(timer_result, extra_fields=None):
+def _build_intervention_response(timer_result, context=None, extra_fields=None):
     """
-    Shared logic for mapping a structural timer result to an intervention response.
+    Delegates intervention decisions to DecisionEngine.
 
-    Used by both the user-specific and custom intervention endpoints to avoid
-    duplicating the overuse_gap threshold logic.
+    StructuralTimerEngine computes the personalized timer.
+    DecisionEngine decides how that timer should be translated into
+    an intervention using live Chrome context.
     """
 
-    overuse_gap = timer_result.get("overuse_gap_minutes", 0)
-    recommended_timer = round(timer_result.get("recommended_timer_minutes", 0))
-
-    if overuse_gap == 0:
-        usage_status = "STABLE"
-        friction_type = "NONE"
-        message = "Your usage is close to your baseline. No intervention needed right now."
-
-    elif overuse_gap <= 10:
-        usage_status = "SLIGHTLY_ABOVE_BASELINE"
-        friction_type = "SOFT_WARNING"
-        message = "Your usage is slightly above your normal pattern. Consider taking a short break."
-
-    elif overuse_gap <= 30:
-        usage_status = "HIGH_USAGE"
-        friction_type = "TIMER_WARNING"
-        message = "Your usage is noticeably above baseline. A timer limit is recommended."
-
-    else:
-        usage_status = "RISKY_USAGE_SPIKE"
-        friction_type = "STRONG_FRICTION"
-        message = "Your usage is much higher than usual. A stricter break or blocking intervention is recommended."
-
-    response = {
-        "mode": timer_result.get("mode"),
-        "timer_active": timer_result.get("timer_active"),
-        "usage_status": usage_status,
-        "friction_type": friction_type,
-        "recommended_timer_minutes": recommended_timer,
-        "overuse_gap_minutes": overuse_gap,
-        "baseline_usage_minutes": timer_result.get("baseline_usage_minutes"),
-        "recent_usage_minutes": timer_result.get("recent_usage_minutes"),
-        "rho_user": timer_result.get("rho_user"),
-        "message": message
-    }
+    response = decision_engine.decide(
+        timer_result=timer_result,
+        context=context
+    )
 
     if extra_fields:
         response = {**extra_fields, **response}
 
     return response
-
 
 @app.get("/")
 def home():
@@ -279,8 +252,10 @@ def get_user_intervention(user_id: int):
 
 
 @app.post("/habitguard/custom/intervention")
+@app.post("/habitguard/custom/intervention")
 def get_custom_intervention(request: CustomUsageRequest):
     usage_history = request.usage_history_minutes
+    context = request.context.model_dump() if request.context else None
 
     timer_result = structural_timer_engine.get_structural_timer_summary(
         usage_history_minutes=usage_history
@@ -293,12 +268,14 @@ def get_custom_intervention(request: CustomUsageRequest):
             "usage_status": "COLLECTING_BASELINE",
             "friction_type": "NONE",
             "recommended_timer_minutes": None,
-            "message": timer_result.get("message")
+            "intervention_type": "NONE",
+            "should_intervene": False,
+            "decision_reason": "HabitGuard is still collecting baseline data.",
+            "message": timer_result.get("message"),
+            "context_used": context
         }
 
-response = _build_intervention_response(timer_result)
-
-if request.context:
-    response["context_received"] = request.context.model_dump()
-
-return response
+    return _build_intervention_response(
+        timer_result,
+        context=context
+    )
