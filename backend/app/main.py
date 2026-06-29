@@ -18,11 +18,24 @@ CSV_PATH = "../data/processed/cleaned_screen_time.csv"
 
 habitguard_service = HabitGuardService(CSV_PATH)
 dataset_service = DatasetService(CSV_PATH)
-df = dataset_service.load_data()
 anomaly_service = AnomalyService()
 risk_service = RiskService()
 segment_service = SegmentService()
 structural_timer_engine = StructuralTimerEngine()
+
+# Single cached DataFrame for dataset-exploration endpoints (/users, /apps,
+# /habitguard/user/*). Loaded once on first request via _get_dataset_df().
+# HabitGuardService uses its own identical cache via _get_df().
+# The two caches hold the same data — this is intentional: dataset_service
+# is stateless (no _df attribute), so we cache here at the app layer.
+_dataset_df = None
+
+
+def _get_dataset_df():
+    global _dataset_df
+    if _dataset_df is None:
+        _dataset_df = dataset_service.load_data()
+    return _dataset_df
 
 
 class AnomalyRequest(BaseModel):
@@ -111,7 +124,7 @@ def home():
 
 @app.get("/users")
 def get_users():
-    users = dataset_service.get_all_users(df)
+    users = dataset_service.get_all_users(_get_dataset_df())
 
     return {
         "total_users": len(users),
@@ -121,7 +134,7 @@ def get_users():
 
 @app.get("/apps")
 def get_apps():
-    apps = dataset_service.get_all_apps(df)
+    apps = dataset_service.get_all_apps(_get_dataset_df())
 
     return {
         "total_apps": len(apps),
@@ -131,7 +144,7 @@ def get_apps():
 
 @app.get("/users/{user_id}/apps")
 def get_user_apps(user_id: int):
-    apps = dataset_service.get_user_apps(df, user_id)
+    apps = dataset_service.get_user_apps(_get_dataset_df(), user_id)
 
     return {
         "user_id": user_id,
@@ -207,9 +220,7 @@ def get_structural_timer(user_id: int):
     # Use daily totals, not raw per-row screen_time_min values.
     # A user with multiple apps per day would otherwise produce multiple
     # entries per day, which the engine would treat as separate days.
-    # DatasetService compares user_id as string internally, so the
-    # existence check is done against the resulting list, not the raw df.
-    usage_history = dataset_service.get_user_daily_total_usage(df, user_id)
+    usage_history = dataset_service.get_user_daily_total_usage(_get_dataset_df(), user_id)
 
     if len(usage_history) == 0:
         return {
@@ -230,7 +241,7 @@ def get_structural_timer(user_id: int):
 @app.get("/habitguard/user/{user_id}/intervention")
 def get_user_intervention(user_id: int):
     # Use daily totals for the same reason as the timer endpoint above.
-    usage_history = dataset_service.get_user_daily_total_usage(df, user_id)
+    usage_history = dataset_service.get_user_daily_total_usage(_get_dataset_df(), user_id)
 
     if len(usage_history) == 0:
         return {

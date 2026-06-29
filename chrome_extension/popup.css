@@ -45,6 +45,7 @@ button {
 button:hover {
   background: #1d4ed8;
 }
+
 button:disabled {
   background: #9ca3af;
   cursor: not-allowed;
@@ -86,4 +87,29 @@ button:disabled {
   padding: 10px;
   border-radius: 10px;
   line-height: 1.4;
+}
+
+.action-buttons {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.action-buttons button {
+  font-size: 12px;
+  padding: 8px;
+}
+
+.category-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+  margin-bottom: 8px;
+}
+
+.category-buttons button {
+  font-size: 12px;
+  padding: 8px;
 }

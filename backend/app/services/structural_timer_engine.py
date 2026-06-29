@@ -1,3 +1,8 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class StructuralTimerEngine:
     """
     User-calibrated timer engine grounded in the Digital Addiction paper
@@ -322,6 +327,28 @@ class StructuralTimerEngine:
         # this user's usage range and should be monitored.
         natural_was_negative = predicted_natural_usage_hours_raw < 0
         target_was_negative = recommended_target_usage_hours_raw < 0
+
+        if natural_was_negative:
+            logger.warning(
+                "StructuralTimerEngine: predicted_natural_usage went negative "
+                "(%.4f hrs) before clamping. rho_user=%.4f, xi_user=%.4f, "
+                "habit_stock=%.4f. Timer output may be distorted.",
+                predicted_natural_usage_hours_raw,
+                rho_user,
+                xi_user,
+                current_habit_stock
+            )
+
+        if target_was_negative:
+            logger.warning(
+                "StructuralTimerEngine: recommended_target_usage went negative "
+                "(%.4f hrs) before clamping. rho_user=%.4f, xi_user=%.4f, "
+                "habit_stock=%.4f. Timer output may be distorted.",
+                recommended_target_usage_hours_raw,
+                rho_user,
+                xi_user,
+                current_habit_stock
+            )
 
         predicted_natural_usage_hours = max(predicted_natural_usage_hours_raw, 0)
         recommended_target_usage_hours = max(recommended_target_usage_hours_raw, 0)

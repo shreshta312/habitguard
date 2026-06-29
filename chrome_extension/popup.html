@@ -11,13 +11,43 @@
   <div class="container">
     <h1>HabitGuard</h1>
 
-    <p class="subtitle">Custom usage intervention demo</p>
+    <p class="subtitle">Live Chrome usage intervention</p>
 
     <div class="button-grid">
-      <button id="stableBtn">Stable</button>
-      <button id="highBtn">High Usage</button>
-      <button id="riskyBtn">Risky Spike</button>
-      <button id="calibrationBtn">Calibration</button>
+      <button id="analyzeBtn">Analyze Usage</button>
+      <button id="seedBtn">Seed Demo</button>
+      <button id="resetBtn">Reset Data</button>
+      <button id="refreshBtn">Refresh</button>
+    </div>
+
+    <div class="card">
+      <p class="label">Today’s Tracked Usage</p>
+      <p id="todayUsage" class="value">Loading...</p>
+    </div>
+
+    <div class="card">
+      <p class="label">Top Domain Today</p>
+      <p id="topDomain" class="value">Loading...</p>
+    </div>
+
+    <div class="card small-card">
+      <p class="label">Current Session</p>
+      <p id="currentSession" class="details">No active session.</p>
+    </div>
+
+    <div class="card small-card">
+      <p class="label">Mark Current Site As</p>
+
+      <div class="category-buttons">
+        <button id="productiveBtn">Productive</button>
+        <button id="mixedBtn">Mixed</button>
+        <button id="temptationBtn">Temptation</button>
+        <button id="neutralBtn">Neutral</button>
+      </div>
+
+      <p id="categoryMessage" class="details">
+        You can personalize site categories.
+      </p>
     </div>
 
     <div class="card">
@@ -36,12 +66,23 @@
     </div>
 
     <div class="card small-card">
+      <p class="label">Intervention Action</p>
+      <p id="actionStatus" class="details">No active timer.</p>
+
+      <div class="action-buttons">
+        <button id="startTimerBtn">Start Timer</button>
+        <button id="breakBtn">Take Break</button>
+        <button id="stopTimerBtn">Stop</button>
+      </div>
+    </div>
+
+    <div class="card small-card">
       <p class="label">Baseline / Recent / Overuse</p>
-      <p id="usageDetails" class="details">Waiting for input...</p>
+      <p id="usageDetails" class="details">Waiting for analysis...</p>
     </div>
 
     <p id="message" class="message">
-      Select a usage pattern to test HabitGuard intervention.
+      Browse for a few minutes, then analyze your live Chrome usage.
     </p>
   </div>
 
