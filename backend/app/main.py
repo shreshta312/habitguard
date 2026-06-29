@@ -60,9 +60,17 @@ class RiskRequest(BaseModel):
     gender_male: float
     gender_other: float
 
+class ContextRequest(BaseModel):
+    current_domain: str | None = None
+    current_category: str | None = None
+    session_minutes: float | None = None
+    top_domains: dict[str, float] | None = None
+    timestamp: int | None = None
+
 
 class CustomUsageRequest(BaseModel):
     usage_history_minutes: list[float]
+    context: ContextRequest | None = None
 
 
 def _build_intervention_response(timer_result, extra_fields=None):
@@ -288,4 +296,9 @@ def get_custom_intervention(request: CustomUsageRequest):
             "message": timer_result.get("message")
         }
 
-    return _build_intervention_response(timer_result)
+response = _build_intervention_response(timer_result)
+
+if request.context:
+    response["context_received"] = request.context.model_dump()
+
+return response
