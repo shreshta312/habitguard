@@ -140,14 +140,11 @@ function createHabitGuardOverlay(payload) {
   overlay
     .querySelector("#habitguard-dismiss")
     .addEventListener("click", () => {
-      try {
-        chrome.runtime.sendMessage({
-          type: "HABITGUARD_OVERLAY_DISMISSED",
-          payload
-        });
-      } catch (err) {
-        console.error("HabitGuard: failed to send dismiss message:", err);
-      }
+      sendHabitGuardFeedback("overlay_dismissed", {
+        ...payload,
+        decision: "overlay_dismissed_by_user",
+        reason: "user_closed_intervention"
+      });
 
       removeHabitGuardOverlay();
     });
@@ -155,17 +152,44 @@ function createHabitGuardOverlay(payload) {
   overlay
     .querySelector("#habitguard-start-break")
     .addEventListener("click", () => {
-      try {
-        chrome.runtime.sendMessage({
-          type: "HABITGUARD_BREAK_ACCEPTED",
-          payload
-        });
-      } catch (err) {
-        console.error("HabitGuard: failed to send break message:", err);
-      }
+      sendHabitGuardFeedback("break_accepted", {
+        ...payload,
+        decision: "break_accepted_by_user",
+        reason: "user_accepted_intervention"
+      });
 
       removeHabitGuardOverlay();
     });
+}
+
+function sendHabitGuardFeedback(eventType, payload = {}) {
+  try {
+    chrome.runtime.sendMessage({
+      type: "HABITGUARD_FEEDBACK_EVENT",
+      eventType: eventType,
+      payload: {
+        user_id: "local_user",
+
+        site: payload.domain || window.location.hostname.replace("www.", ""),
+        category: payload.category || "unknown",
+        overlay_id: payload.overlay_id || HABITGUARD_OVERLAY_ID,
+
+        decision: payload.decision || null,
+        reason: payload.reason || null,
+
+        context: {
+          page_origin: window.location.origin,
+          page_title: document.title,
+          session_minutes: payload.sessionMinutes || 0,
+          timer_minutes: payload.timerMinutes || null,
+          message: payload.message || null,
+          original_payload: payload
+        }
+      }
+    });
+  } catch (err) {
+    console.error("HabitGuard: failed to send feedback event:", err);
+  }
 }
 
 chrome.runtime.onMessage.addListener((message) => {

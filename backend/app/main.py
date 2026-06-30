@@ -7,16 +7,17 @@ from app.services.risk_service import RiskService
 from app.services.segment_service import SegmentService
 from app.services.structural_timer_engine import StructuralTimerEngine
 from app.services.decision_engine import DecisionEngine
+from app.api.feedback import router as feedback_router
 
-structural_timer_engine = StructuralTimerEngine()
-decision_engine = DecisionEngine()
 
 
 app = FastAPI(
     title="HabitGuard API",
     description="Backend API for addiction score, dynamic limits, and usage monitoring",
-    version="1.0.0"
+    version="1.0.0"  
 )
+
+app.include_router(feedback_router)
 
 CSV_PATH = "../data/processed/cleaned_screen_time.csv"
 
@@ -251,7 +252,7 @@ def get_user_intervention(user_id: int):
     )
 
 
-@app.post("/habitguard/custom/intervention")
+
 @app.post("/habitguard/custom/intervention")
 def get_custom_intervention(request: CustomUsageRequest):
     usage_history = request.usage_history_minutes

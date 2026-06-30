@@ -506,3 +506,55 @@ chrome.runtime.onMessage.addListener((message) => {
     });
   }
 });
+const HABITGUARD_API_BASE = "http://127.0.0.1:8000";
+
+async function sendFeedbackEvent(eventType, payload = {}) {
+  const body = {
+    user_id: payload.user_id || "local_user",
+    event_type: eventType,
+
+    site: payload.site || null,
+    category: payload.category || null,
+    overlay_id: payload.overlay_id || null,
+
+    decision: payload.decision || null,
+    reason: payload.reason || null,
+
+    timestamp: new Date().toISOString(),
+
+    context: payload.context || {}
+  };
+
+  try {
+    const response = await fetch(`${HABITGUARD_API_BASE}/feedback/event`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+
+    const data = await response.json();
+
+    return {
+      success: response.ok,
+      data
+    };
+  } catch (error) {
+    console.error("HabitGuard feedback send failed:", error);
+
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "HABITGUARD_FEEDBACK_EVENT") {
+    sendFeedbackEvent(message.eventType, message.payload)
+      .then(sendResponse);
+
+    return true;
+  }
+});
