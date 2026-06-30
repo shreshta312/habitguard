@@ -8,7 +8,7 @@ from app.services.segment_service import SegmentService
 from app.services.structural_timer_engine import StructuralTimerEngine
 from app.services.decision_engine import DecisionEngine
 from app.api.feedback import router as feedback_router
-
+from app.services.feedback_service import feedback_service
 
 
 app = FastAPI(
@@ -84,12 +84,15 @@ def _build_intervention_response(timer_result, context=None, extra_fields=None):
 
     StructuralTimerEngine computes the personalized timer.
     DecisionEngine decides how that timer should be translated into
-    an intervention using live Chrome context.
+    an intervention using live Chrome context and feedback history.
     """
+
+    feedback_summary = feedback_service.get_summary()
 
     response = decision_engine.decide(
         timer_result=timer_result,
-        context=context
+        context=context,
+        feedback_summary=feedback_summary
     )
 
     if extra_fields:
