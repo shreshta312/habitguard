@@ -42,10 +42,16 @@ class AnomalyService:
             message = "Usage pattern looks normal."
 
         return {
-            "screen_time_min": screen_time_min,
-            "launches": launches,
-            "interactions": interactions,
-            "is_productive": is_productive,
-            "result": result,
-            "message": message
+            "model_role": "supporting_dashboard_analytics",
+          "used_in_live_intervention_loop": False,
+          "analytics_purpose": (
+         "Detects unusual usage patterns for dashboard alerts. "
+         "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
+         ),
+         "screen_time_min": screen_time_min,
+          "launches": launches,
+         "interactions": interactions,
+          "is_productive": is_productive,
+          "result": result,
+         "message": message
         }

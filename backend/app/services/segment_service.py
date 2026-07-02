@@ -48,6 +48,12 @@ class SegmentService:
         segment_name = self.get_segment_name(features)
 
         return {
-            "cluster": int(cluster),
-            "segment_name": segment_name
+         "model_role": "supporting_dashboard_analytics",
+         "used_in_live_intervention_loop": False,
+         "analytics_purpose": (
+         "Groups users into behavior segments for dashboard personalization. "
+         "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
+         ),
+          "cluster": int(cluster),
+          "segment_name": segment_name
         }

@@ -30,8 +30,14 @@ class RiskService:
             result = "LOW ADDICTION RISK"
 
         return {
-            "prediction": int(prediction),
+          "model_role": "supporting_dashboard_analytics",
+           "used_in_live_intervention_loop": False,
+            "analytics_purpose": (
+            "Estimates overall addiction risk for dashboard awareness. "
+            "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
+           ),
+           "prediction": int(prediction),
             "risk_result": result,
             "not_addicted_probability": round(probability[0] * 100, 2),
-            "addicted_probability": round(probability[1] * 100, 2)
+          "addicted_probability": round(probability[1] * 100, 2)
         }
