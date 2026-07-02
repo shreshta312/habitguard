@@ -5,16 +5,27 @@ from app.services.dynamic_limit_engine import DynamicLimitEngine
 
 class HabitGuardService:
     """
-    Main service that combines:
+    Legacy/reference summary service.
+
+    This service combines:
     - dataset loading
-    - addiction score calculation
-    - dynamic limit recommendation
+    - AddictionEngine score calculation
+    - DynamicLimitEngine limit recommendation
     - friction decision
 
-    Note: df is loaded once at FastAPI startup in main.py and passed
-    into service methods directly. Methods here call load_data() only
-    when invoked standalone (e.g. tests). In production, the df loaded
-    at startup is used via the dataset_service passed to each method.
+    Important:
+    This is not the main JITAI intervention engine anymore.
+
+    The main HabitGuard intervention flow is:
+        StructuralTimerEngine -> DecisionEngine -> FeedbackService
+
+    This legacy service is retained for comparison, debugging, and
+    simple user/app summaries exposed through:
+        /users/{user_id}/summary
+        /users/{user_id}/apps/{app_name}/summary
+
+    It should not be described as the core personalized structural
+    timer system.
     """
 
     def __init__(self, csv_path):
@@ -62,6 +73,13 @@ class HabitGuardService:
         )
 
         return {
+            "model_type": "legacy_addiction_score_summary",
+            "is_primary_intervention_model": False,
+            "primary_model_note": (
+                "Main HabitGuard interventions use StructuralTimerEngine "
+                "and DecisionEngine. This endpoint is retained as a legacy "
+                "summary/reference path."
+            ),
             "user_id": user_id,
             "daily_usage_history": daily_usage_history,
             "addiction_scores": addiction_scores,
@@ -99,6 +117,13 @@ class HabitGuardService:
         )
 
         return {
+            "model_type": "legacy_app_addiction_score_summary",
+            "is_primary_intervention_model": False,
+            "primary_model_note": (
+                "Main HabitGuard interventions use StructuralTimerEngine "
+                "and DecisionEngine. This endpoint is retained as a legacy "
+                "app-level summary/reference path."
+            ),
             "user_id": user_id,
             "app_name": app_name,
             "usage_history": usage_history,
