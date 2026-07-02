@@ -251,8 +251,16 @@ async function getDailyUsageHistory() {
 }
 
 function shouldTriggerNotification(intervention) {
-  const status = intervention.usage_status;
-  return status === "HIGH_USAGE" || status === "RISKY_USAGE_SPIKE";
+  if (!intervention || !intervention.should_intervene) {
+    return false;
+  }
+
+  const frictionType = intervention.friction_type;
+
+  return (
+    frictionType === "TIMER_WARNING" ||
+    frictionType === "STRONG_FRICTION"
+  );
 }
 
 async function isNotificationCooldownActive() {
@@ -265,13 +273,18 @@ async function isNotificationCooldownActive() {
   return elapsedMinutes < NOTIFICATION_COOLDOWN_MINUTES;
 }
 
-async function isOverlayCooldownActive() {
-  const stored = await chrome.storage.local.get(["lastOverlayShownAt"]);
-  const lastOverlayShownAt = stored.lastOverlayShownAt;
+async function isOverlayCooldownActive(domain) {
+  if (!domain) return false;
+
+  const stored = await chrome.storage.local.get(["overlayCooldownByDomain"]);
+  const overlayCooldownByDomain = stored.overlayCooldownByDomain || {};
+
+  const lastOverlayShownAt = overlayCooldownByDomain[domain];
 
   if (!lastOverlayShownAt) return false;
 
   const elapsedMinutes = (Date.now() - lastOverlayShownAt) / (1000 * 60);
+
   return elapsedMinutes < OVERLAY_COOLDOWN_MINUTES;
 }
 
@@ -303,21 +316,26 @@ async function showInterventionNotification(intervention) {
 }
 
 async function updateBadge(intervention) {
-  const status = intervention.usage_status;
+  if (!intervention || !intervention.should_intervene) {
+    await chrome.action.setBadgeText({ text: "" });
+    return;
+  }
 
-  if (status === "RISKY_USAGE_SPIKE") {
+  const frictionType = intervention.friction_type;
+
+  if (frictionType === "STRONG_FRICTION") {
     await chrome.action.setBadgeText({ text: "!" });
     await chrome.action.setBadgeBackgroundColor({ color: "#dc2626" });
     return;
   }
 
-  if (status === "HIGH_USAGE") {
+  if (frictionType === "TIMER_WARNING") {
     await chrome.action.setBadgeText({ text: "T" });
     await chrome.action.setBadgeBackgroundColor({ color: "#f97316" });
     return;
   }
 
-  if (status === "SLIGHTLY_ABOVE_BASELINE") {
+  if (frictionType === "SOFT_WARNING") {
     await chrome.action.setBadgeText({ text: "S" });
     await chrome.action.setBadgeBackgroundColor({ color: "#2563eb" });
     return;
@@ -331,17 +349,18 @@ function shouldTriggerOverlay(intervention, currentSession) {
     return false;
   }
 
-  const status = intervention.usage_status;
+  const shouldIntervene = intervention.should_intervene;
+  const frictionType = intervention.friction_type;
   const category = currentSession.category;
   const sessionMinutes = currentSession.sessionMinutes || 0;
 
-  const riskyStatus =
-    status === "HIGH_USAGE" || status === "RISKY_USAGE_SPIKE";
+  const strongEnough =
+    frictionType === "STRONG_FRICTION" || frictionType === "TIMER_WARNING";
 
   const riskyContext =
     category === "temptation" && sessionMinutes >= 3;
 
-  return riskyStatus && riskyContext;
+  return shouldIntervene && strongEnough && riskyContext;
 }
 
 async function sendOverlayToActiveTab(intervention, currentSession) {
@@ -367,9 +386,17 @@ async function sendOverlayToActiveTab(intervention, currentSession) {
       payload
     });
 
+    const now = Date.now();
+
+    const stored = await chrome.storage.local.get(["overlayCooldownByDomain"]);
+    const overlayCooldownByDomain = stored.overlayCooldownByDomain || {};
+
+    overlayCooldownByDomain[currentSession.domain] = now;
+
     await chrome.storage.local.set({
-      lastOverlayShownAt: Date.now(),
-      lastOverlayPayload: payload
+      lastOverlayShownAt: now,
+      lastOverlayPayload: payload,
+      overlayCooldownByDomain
     });
   } catch (error) {
     console.error("HabitGuard overlay failed:", error);
@@ -434,7 +461,9 @@ async function runJitaiCheck() {
     }
 
     if (shouldTriggerOverlay(intervention, currentSession)) {
-      const overlayCooldownActive = await isOverlayCooldownActive();
+      const overlayCooldownActive = await isOverlayCooldownActive(
+        currentSession?.domain
+      );
 
       if (!overlayCooldownActive) {
         await sendOverlayToActiveTab(intervention, currentSession);
@@ -551,10 +580,44 @@ async function sendFeedbackEvent(eventType, payload = {}) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "HABITGUARD_FEEDBACK_EVENT") {
-    sendFeedbackEvent(message.eventType, message.payload)
-      .then(sendResponse);
-
-    return true;
+  if (!message || message.type !== "HABITGUARD_FEEDBACK_EVENT") {
+    return;
   }
+
+  const eventType = message.eventType;
+  const payload = message.payload || {};
+
+  if (eventType === "overlay_dismissed") {
+    chrome.storage.local.set({
+      lastOverlayDismissedAt: Date.now(),
+      lastOverlayDismissedPayload: payload
+    });
+  }
+
+  if (eventType === "break_accepted") {
+    const endAt = Date.now() + 5 * 60 * 1000;
+
+    chrome.storage.local.set({
+      lastBreakAcceptedAt: Date.now(),
+      lastBreakAcceptedPayload: payload,
+      activeInterventionTimer: {
+        type: "break",
+        durationMinutes: 5,
+        endAt
+      }
+    });
+  }
+
+  if (eventType === "break_completed" || eventType === "break_skipped") {
+    chrome.storage.local.set({
+      activeInterventionTimer: null,
+      lastBreakEndedAt: Date.now(),
+      lastBreakEndReason: eventType,
+      lastBreakEndPayload: payload
+    });
+  }
+
+  sendFeedbackEvent(eventType, payload).then(sendResponse);
+
+  return true;
 });
