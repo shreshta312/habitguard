@@ -1,11 +1,176 @@
 const HABITGUARD_OVERLAY_ID = "habitguard-jitai-overlay";
+let habitGuardBreakInterval = null;
 
 function removeHabitGuardOverlay() {
+  if (habitGuardBreakInterval) {
+    clearInterval(habitGuardBreakInterval);
+    habitGuardBreakInterval = null;
+  }
+
   const existingOverlay = document.getElementById(HABITGUARD_OVERLAY_ID);
 
   if (existingOverlay) {
     existingOverlay.remove();
   }
+}
+
+function startHabitGuardBreak(payload = {}, durationMinutes = 5) {
+  removeHabitGuardOverlay();
+
+  const overlay = document.createElement("div");
+  overlay.id = HABITGUARD_OVERLAY_ID;
+
+  let remainingSeconds = durationMinutes * 60;
+
+  overlay.innerHTML = `
+    <div class="habitguard-modal">
+      <div class="habitguard-badge">HabitGuard Break</div>
+
+      <h2>Break started</h2>
+
+      <p class="habitguard-main-message">
+        Step away from this site for a few minutes. Stretch, drink water, or rest your eyes.
+      </p>
+
+      <div class="habitguard-countdown" id="habitguard-break-countdown">
+        ${formatHabitGuardTime(remainingSeconds)}
+      </div>
+
+      <p class="habitguard-note">
+        This break helps interrupt the current high-risk usage pattern.
+      </p>
+
+      <div class="habitguard-actions single">
+        <button id="habitguard-end-break">End Break Early</button>
+      </div>
+    </div>
+  `;
+
+  const style = document.createElement("style");
+  style.textContent = `
+    #habitguard-jitai-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483647;
+      background: rgba(15, 23, 42, 0.78);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: Arial, sans-serif;
+    }
+
+    #habitguard-jitai-overlay .habitguard-modal {
+      width: min(420px, calc(100vw - 32px));
+      background: white;
+      color: #111827;
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+      text-align: center;
+    }
+
+    #habitguard-jitai-overlay .habitguard-badge {
+      display: inline-block;
+      background: #16a34a;
+      color: white;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+
+    #habitguard-jitai-overlay h2 {
+      margin: 0 0 10px;
+      font-size: 24px;
+      color: #111827;
+    }
+
+    #habitguard-jitai-overlay .habitguard-main-message {
+      font-size: 15px;
+      line-height: 1.45;
+      color: #374151;
+      margin: 0 0 18px;
+    }
+
+    #habitguard-jitai-overlay .habitguard-countdown {
+      font-size: 44px;
+      font-weight: bold;
+      color: #111827;
+      background: #f3f4f6;
+      border-radius: 16px;
+      padding: 18px;
+      margin: 14px 0;
+      letter-spacing: 1px;
+    }
+
+    #habitguard-jitai-overlay .habitguard-actions.single {
+      display: grid;
+      grid-template-columns: 1fr;
+      margin-top: 14px;
+    }
+
+    #habitguard-jitai-overlay button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 14px;
+      background: #e5e7eb;
+      color: #111827;
+    }
+
+    #habitguard-jitai-overlay .habitguard-note {
+      margin: 12px 0 0;
+      font-size: 12px;
+      color: #6b7280;
+      line-height: 1.4;
+    }
+  `;
+
+  overlay.appendChild(style);
+  document.body.appendChild(overlay);
+
+  const countdownElement = overlay.querySelector("#habitguard-break-countdown");
+
+  habitGuardBreakInterval = setInterval(() => {
+    remainingSeconds -= 1;
+
+    if (countdownElement) {
+      countdownElement.textContent = formatHabitGuardTime(remainingSeconds);
+    }
+
+    if (remainingSeconds <= 0) {
+      sendHabitGuardFeedback("break_completed", {
+        ...payload,
+        decision: "break_completed_by_user",
+        reason: "user_completed_intervention_break"
+      });
+
+      removeHabitGuardOverlay();
+    }
+  }, 1000);
+
+  overlay
+    .querySelector("#habitguard-end-break")
+    .addEventListener("click", () => {
+      sendHabitGuardFeedback("break_skipped", {
+        ...payload,
+        decision: "break_ended_early_by_user",
+        reason: "user_ended_break_before_completion"
+      });
+
+      removeHabitGuardOverlay();
+    });
+}
+
+function formatHabitGuardTime(totalSeconds) {
+  const safeSeconds = Math.max(0, totalSeconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function createHabitGuardOverlay(payload) {
@@ -158,7 +323,7 @@ function createHabitGuardOverlay(payload) {
         reason: "user_accepted_intervention"
       });
 
-      removeHabitGuardOverlay();
+      startHabitGuardBreak(payload, 5);
     });
 }
 
