@@ -259,10 +259,25 @@ def get_user_intervention(user_id: int):
 
 
 @app.post("/habitguard/custom/intervention")
+@app.post("/habitguard/custom/intervention")
 def get_custom_intervention(request: CustomUsageRequest):
     usage_history = request.usage_history_minutes
     context = request.context.model_dump() if request.context else None
 
+    if len(usage_history) == 0:
+        return {
+            "mode": "NO_DATA",
+            "timer_active": False,
+            "usage_status": "NO_USAGE_HISTORY",
+            "friction_type": "NONE",
+            "recommended_timer_minutes": None,
+            "intervention_type": "NONE",
+            "should_intervene": False,
+            "decision_reason": "No usage history is available yet.",
+            "message": "Browse for a few minutes so HabitGuard can start tracking usage.",
+            "context_used": context,
+            "error": "No usage history available"
+        }
     timer_result = structural_timer_engine.get_structural_timer_summary(
         usage_history_minutes=usage_history
     )

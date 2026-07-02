@@ -151,3 +151,22 @@ def test_response_has_required_keys():
 
     for key in required_keys:
         assert key in data
+
+def test_empty_usage_history_returns_no_data_response():
+    response = client.post(
+        "/habitguard/custom/intervention",
+        json={
+            "usage_history_minutes": []
+        }
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["mode"] == "NO_DATA"
+    assert data["timer_active"] is False
+    assert data["should_intervene"] is False
+    assert data["friction_type"] == "NONE"
+    assert data["recommended_timer_minutes"] is None
+    assert "error" in data
