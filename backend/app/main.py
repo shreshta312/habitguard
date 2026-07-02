@@ -27,6 +27,8 @@ anomaly_service = AnomalyService()
 risk_service = RiskService()
 segment_service = SegmentService()
 structural_timer_engine = StructuralTimerEngine()
+decision_engine = DecisionEngine()
+
 
 # Single cached DataFrame for dataset-exploration endpoints (/users, /apps,
 # /habitguard/user/*). Loaded once on first request via _get_dataset_df().
