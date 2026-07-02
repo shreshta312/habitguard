@@ -45,3 +45,27 @@ def test_feedback_summary_endpoint():
     assert "break_acceptance_rate" in data
     assert "most_dismissed_sites" in data
     assert "most_accepted_break_sites" in data
+
+def test_feedback_summary_can_filter_by_user_id():
+    payload = {
+        "user_id": "filter_test_user",
+        "event_type": "overlay_dismissed",
+        "site": "youtube.com",
+        "category": "temptation",
+        "decision": "overlay_dismissed_by_user",
+        "reason": "test_user_filter",
+        "context": {
+            "test": True
+        }
+    }
+
+    post_response = client.post("/feedback/event", json=payload)
+    assert post_response.status_code == 200
+
+    summary_response = client.get("/feedback/summary?user_id=filter_test_user")
+    assert summary_response.status_code == 200
+
+    data = summary_response.json()
+
+    assert data["total_events"] >= 1
+    assert data["event_type_counts"]["overlay_dismissed"] >= 1

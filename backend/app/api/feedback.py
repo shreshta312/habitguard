@@ -19,9 +19,9 @@ def save_feedback_event(event: FeedbackEvent):
 
 
 @router.get("/summary")
-def get_feedback_summary():
+def get_feedback_summary(user_id: str | None = None):
     try:
-        return feedback_service.get_summary()
+        return feedback_service.get_summary(user_id=user_id)
     except Exception as e:
         raise HTTPException(
             status_code=500,

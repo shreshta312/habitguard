@@ -76,11 +76,17 @@ class ContextRequest(BaseModel):
 
 
 class CustomUsageRequest(BaseModel):
+    user_id: str = "local_user"
     usage_history_minutes: list[float]
     context: ContextRequest | None = None
 
 
-def _build_intervention_response(timer_result, context=None, extra_fields=None):
+def _build_intervention_response(
+    timer_result,
+    context=None,
+    extra_fields=None,
+    user_id="local_user"
+):
     """
     Delegates intervention decisions to DecisionEngine.
 
@@ -89,7 +95,7 @@ def _build_intervention_response(timer_result, context=None, extra_fields=None):
     an intervention using live Chrome context and feedback history.
     """
 
-    feedback_summary = feedback_service.get_summary()
+    feedback_summary = feedback_service.get_summary(user_id=user_id)
 
     response = decision_engine.decide(
         timer_result=timer_result,
@@ -251,14 +257,14 @@ def get_user_intervention(user_id: int):
             "message": timer_result.get("message")
         }
 
-    return _build_intervention_response(
+        return _build_intervention_response(
         timer_result,
-        extra_fields={"user_id": user_id}
+        extra_fields={"user_id": user_id},
+        user_id=str(user_id)
     )
 
 
 
-@app.post("/habitguard/custom/intervention")
 @app.post("/habitguard/custom/intervention")
 def get_custom_intervention(request: CustomUsageRequest):
     usage_history = request.usage_history_minutes
@@ -278,6 +284,7 @@ def get_custom_intervention(request: CustomUsageRequest):
             "context_used": context,
             "error": "No usage history available"
         }
+
     timer_result = structural_timer_engine.get_structural_timer_summary(
         usage_history_minutes=usage_history
     )
@@ -298,5 +305,6 @@ def get_custom_intervention(request: CustomUsageRequest):
 
     return _build_intervention_response(
         timer_result,
-        context=context
+        context=context,
+        user_id=request.user_id
     )

@@ -56,8 +56,14 @@ class FeedbackService:
 
         return events
 
-    def get_summary(self):
+    def get_summary(self, user_id=None):
         events = self.load_events()
+
+        if user_id is not None:
+            events = [
+                event for event in events
+                if str(event.get("user_id", "local_user")) == str(user_id)
+            ]
 
         total_events = len(events)
 
@@ -94,6 +100,7 @@ class FeedbackService:
         )
 
         return {
+            "user_id": user_id,
             "total_events": total_events,
             "event_type_counts": dict(event_type_counts),
             "overlay_dismissed_count": overlay_dismissed_count,
