@@ -252,7 +252,8 @@ async function parseApiResponse(response) {
   }
 }
 
-async function sendUsageSnapshotFromPopup(latestIntervention = null) {
+async function sendUsageSnapshotFromPopup(latestIntervention = null, options = {}) {
+  const { source = "chrome_extension_popup" } = options;
   try {
     const todayKey = getTodayKey();
 
@@ -275,7 +276,7 @@ async function sendUsageSnapshotFromPopup(latestIntervention = null) {
       latest_intervention:
         latestIntervention || stored.latestIntervention || null,
       active_intervention_timer: stored.activeInterventionTimer || null,
-      source: "chrome_extension_popup"
+      source
     };
 
     const response = await fetch(USAGE_SNAPSHOT_URL, {
@@ -437,6 +438,9 @@ async function saveActiveTimer(type, durationMinutes) {
       endAt
     }
   });
+  await sendUsageSnapshotFromPopup(null, {
+    source: "chrome_extension_timer_started"
+  });
 
   startCountdown(endAt, type);
 }
@@ -458,7 +462,11 @@ function startCountdown(endAt, type) {
           ? "Break complete. You can return mindfully."
           : "Timer complete. Consider stopping or taking a short break.";
 
-      chrome.storage.local.remove(["activeInterventionTimer"]);
+      chrome.storage.local.remove(["activeInterventionTimer"]).then(() => {
+        sendUsageSnapshotFromPopup(null, {
+          source: "chrome_extension_timer_cleared"
+        });
+      });
       return;
     }
 
@@ -481,6 +489,9 @@ async function loadActiveTimer() {
 
   if (activeTimer.endAt <= Date.now()) {
     await chrome.storage.local.remove(["activeInterventionTimer"]);
+    await sendUsageSnapshotFromPopup(null, {
+      source: "chrome_extension_timer_cleared"
+    });
     actionStatusEl.textContent = "No active timer.";
     return;
   }
@@ -509,6 +520,9 @@ async function stopActiveTimer() {
   }
 
   await chrome.storage.local.remove(["activeInterventionTimer"]);
+  await sendUsageSnapshotFromPopup(null, {
+    source: "chrome_extension_timer_cleared"
+  });
   actionStatusEl.textContent = "Timer stopped.";
 }
 
@@ -537,6 +551,9 @@ async function setCurrentDomainCategory(category) {
   await chrome.storage.local.set({
     userDomainCategories: updatedCategories,
     currentSession: updatedSession
+  });
+  await sendUsageSnapshotFromPopup(null, {
+    source: "chrome_extension_category_updated"
   });
 
   renderCurrentSession(updatedSession);
