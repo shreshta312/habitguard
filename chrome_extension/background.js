@@ -1,4 +1,5 @@
 const API_URL = "http://127.0.0.1:8000/habitguard/custom/intervention";
+const USAGE_SNAPSHOT_URL = "http://127.0.0.1:8000/usage/snapshot";
 
 const TRACKING_ALARM_NAME = "habitguard_usage_tracker";
 const JITAI_ALARM_NAME = "habitguard_jitai_checker";
@@ -403,6 +404,66 @@ async function sendOverlayToActiveTab(intervention, currentSession) {
   }
 }
 
+async function sendUsageSnapshot(latestIntervention = null) {
+  try {
+    const todayKey = getTodayKey();
+
+    const stored = await chrome.storage.local.get([
+      "dailyUsageMinutes",
+      "domainUsageMinutes",
+      "currentSession",
+      "sessionHistory",
+      "latestIntervention",
+      "activeInterventionTimer"
+    ]);
+
+    const body = {
+      user_id: "local_user",
+      date: todayKey,
+      daily_usage_minutes: stored.dailyUsageMinutes || {},
+      domain_usage_minutes: stored.domainUsageMinutes || {},
+      current_session: stored.currentSession || null,
+      session_history: stored.sessionHistory || [],
+      latest_intervention:
+        latestIntervention || stored.latestIntervention || null,
+      active_intervention_timer: stored.activeInterventionTimer || null,
+      source: "chrome_extension"
+    };
+
+    const response = await fetch(USAGE_SNAPSHOT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+
+    const data = await response.json();
+
+    await chrome.storage.local.set({
+      lastUsageSnapshotAt: Date.now(),
+      lastUsageSnapshotResult: data
+    });
+
+    return {
+      success: response.ok,
+      data
+    };
+  } catch (error) {
+    console.error("HabitGuard usage snapshot failed:", error);
+
+    await chrome.storage.local.set({
+      lastUsageSnapshotError: error.message,
+      lastUsageSnapshotFailedAt: Date.now()
+    });
+
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
 async function runJitaiCheck() {
   if (jitaiRunning) {
     debugLog("HabitGuard JITAI: skipping, previous check still in flight.");
@@ -453,6 +514,8 @@ async function runJitaiCheck() {
       latestIntervention: intervention,
       latestInterventionCheckedAt: Date.now()
     });
+
+    await sendUsageSnapshot(intervention);
 
     await updateBadge(intervention);
 
