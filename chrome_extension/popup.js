@@ -43,8 +43,12 @@ const allButtons = [
 let currentRecommendedTimerMinutes = null;
 let countdownInterval = null;
 
-function getTodayKey() {
-  return new Date().toISOString().slice(0, 10);
+function getTodayKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 function setButtonsEnabled(enabled) {
@@ -232,6 +236,22 @@ async function loadLatestIntervention() {
   renderResult(latestIntervention, latestInterventionCheckedAt);
 }
 
+async function parseApiResponse(response) {
+  const text = await response.text();
+
+  if (!text) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return {
+      raw_response: text
+    };
+  }
+}
+
 async function sendUsageSnapshotFromPopup(latestIntervention = null) {
   try {
     const todayKey = getTodayKey();
@@ -266,7 +286,7 @@ async function sendUsageSnapshotFromPopup(latestIntervention = null) {
       body: JSON.stringify(body)
     });
 
-    const data = await response.json();
+    const data = await parseApiResponse(response);
 
     await chrome.storage.local.set({
       lastPopupUsageSnapshotAt: Date.now(),

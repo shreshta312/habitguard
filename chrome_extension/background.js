@@ -1,6 +1,7 @@
 const API_URL = "http://127.0.0.1:8000/habitguard/custom/intervention";
 const USAGE_SNAPSHOT_URL = "http://127.0.0.1:8000/usage/snapshot";
 
+const USAGE_SNAPSHOT_THROTTLE_MS = 2 * 60 * 1000;
 const TRACKING_ALARM_NAME = "habitguard_usage_tracker";
 const JITAI_ALARM_NAME = "habitguard_jitai_checker";
 
@@ -20,8 +21,12 @@ function debugLog(...args) {
 // Concurrency guard: prevents overlapping JITAI fetch calls.
 let jitaiRunning = false;
 
-function getTodayKey() {
-  return new Date().toISOString().slice(0, 10);
+function getTodayKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 function isTrackableUrl(url) {
@@ -404,9 +409,28 @@ async function sendOverlayToActiveTab(intervention, currentSession) {
   }
 }
 
-async function sendUsageSnapshot(latestIntervention = null) {
+async function parseApiResponse(response) {
+  const text = await response.text();
+
+  if (!text) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return {
+      raw_response: text
+    };
+  }
+}
+
+async function sendUsageSnapshot(latestIntervention = null, options = {}) {
+  const { force = false, source = "chrome_extension" } = options;
+
   try {
     const todayKey = getTodayKey();
+    const now = Date.now();
 
     const stored = await chrome.storage.local.get([
       "dailyUsageMinutes",
@@ -414,8 +438,24 @@ async function sendUsageSnapshot(latestIntervention = null) {
       "currentSession",
       "sessionHistory",
       "latestIntervention",
-      "activeInterventionTimer"
+      "activeInterventionTimer",
+      "lastUsageSnapshotAt"
     ]);
+
+    const lastSnapshotAt = stored.lastUsageSnapshotAt || 0;
+
+    if (!force && now - lastSnapshotAt < USAGE_SNAPSHOT_THROTTLE_MS) {
+      await chrome.storage.local.set({
+        lastUsageSnapshotSkippedAt: now,
+        lastUsageSnapshotSkipReason: "throttled"
+      });
+
+      return {
+        success: true,
+        skipped: true,
+        reason: "throttled"
+      };
+    }
 
     const body = {
       user_id: "local_user",
@@ -427,7 +467,7 @@ async function sendUsageSnapshot(latestIntervention = null) {
       latest_intervention:
         latestIntervention || stored.latestIntervention || null,
       active_intervention_timer: stored.activeInterventionTimer || null,
-      source: "chrome_extension"
+      source
     };
 
     const response = await fetch(USAGE_SNAPSHOT_URL, {
@@ -438,17 +478,24 @@ async function sendUsageSnapshot(latestIntervention = null) {
       body: JSON.stringify(body)
     });
 
-    const data = await response.json();
+    const data = await parseApiResponse(response);
 
-    await chrome.storage.local.set({
-      lastUsageSnapshotAt: Date.now(),
-      lastUsageSnapshotResult: data
-    });
-
-    return {
+    const result = {
       success: response.ok,
+      status: response.status,
       data
     };
+
+    await chrome.storage.local.set({
+      lastUsageSnapshotAt: response.ok ? now : stored.lastUsageSnapshotAt || null,
+      lastUsageSnapshotResult: result
+    });
+
+    if (!response.ok) {
+      console.error("HabitGuard usage snapshot failed:", result);
+    }
+
+    return result;
   } catch (error) {
     console.error("HabitGuard usage snapshot failed:", error);
 
