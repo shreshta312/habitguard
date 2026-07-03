@@ -1,0 +1,288 @@
+:root {
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  color: #e5eefc;
+  background: #07111f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 30%),
+    radial-gradient(circle at top right, rgba(34, 197, 94, 0.12), transparent 32%),
+    #07111f;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  background: #38bdf8;
+  color: #03111f;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+button:hover {
+  opacity: 0.9;
+}
+
+.app-shell {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0 56px;
+}
+
+.hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.eyebrow,
+.card-label {
+  margin: 0 0 8px;
+  color: #7dd3fc;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 800;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  font-size: clamp(2rem, 4vw, 4rem);
+  line-height: 1;
+  margin-bottom: 14px;
+}
+
+h2 {
+  margin-bottom: 12px;
+}
+
+.hero-text,
+.muted,
+.empty-text {
+  color: #9fb1c7;
+}
+
+.grid {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.metrics-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.two-column-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.three-column-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.card,
+.status-card {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.72);
+  border-radius: 24px;
+  padding: 22px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px);
+}
+
+.metric-card h2 {
+  font-size: 2.1rem;
+}
+
+.wide-card {
+  margin-bottom: 18px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.trend-chart {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 14px;
+  min-height: 240px;
+  align-items: end;
+  padding-top: 18px;
+}
+
+.trend-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.bar-track {
+  width: 100%;
+  height: 150px;
+  border-radius: 16px;
+  background: rgba(148, 163, 184, 0.16);
+  display: flex;
+  align-items: end;
+  overflow: hidden;
+}
+
+.bar-fill {
+  width: 100%;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(180deg, #38bdf8, #22c55e);
+}
+
+.trend-value {
+  font-size: 0.78rem;
+  color: #e5eefc;
+  margin: 0;
+}
+
+.trend-label {
+  font-size: 0.72rem;
+  color: #9fb1c7;
+  margin: 0;
+  text-align: center;
+}
+
+.domain-list,
+.kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.domain-row,
+.kv-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.domain-row:last-child,
+.kv-row:last-child {
+  border-bottom: 0;
+}
+
+.domain-row span,
+.kv-row strong {
+  text-align: right;
+}
+
+.kv-row span {
+  color: #9fb1c7;
+}
+
+.status-card {
+  margin-top: 24px;
+}
+
+.error-card {
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+@media (max-width: 900px) {
+  .hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .metrics-grid,
+  .two-column-grid,
+  .three-column-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .trend-chart {
+    overflow-x: auto;
+    grid-template-columns: repeat(7, minmax(72px, 1fr));
+  }
+}
+
+.nested-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nested-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.nested-row:last-child {
+  border-bottom: 0;
+}
+
+.nested-row span {
+  color: #9fb1c7;
+  text-align: left;
+}
+
+.nested-row strong {
+  text-align: right;
+}
+
+.kv-row {
+  align-items: flex-start;
+}
+
+.kv-row>span {
+  min-width: 180px;
+}
+
+.kv-row>strong {
+  max-width: 70%;
+  overflow-wrap: anywhere;
+}
+
+.three-column-grid {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.two-column-grid,
+.three-column-grid {
+  align-items: start;
+}
+
+.nested-row strong {
+  white-space: normal;
+  letter-spacing: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.kv-row>strong {
+  letter-spacing: normal;
+  line-height: 1.45;
+}
+
+.kv-row.long-text {
+  align-items: flex-start;
+}
