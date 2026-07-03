@@ -170,3 +170,14 @@ def test_empty_usage_history_returns_no_data_response():
     assert data["friction_type"] == "NONE"
     assert data["recommended_timer_minutes"] is None
     assert "error" in data
+
+def test_user_intervention_endpoint_returns_response():
+    response = client.get("/habitguard/user/1000/intervention")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data is not None
+    assert isinstance(data, dict)
+    assert "user_id" in data or "error" in data

@@ -235,7 +235,10 @@ def get_structural_timer(user_id: int):
 @app.get("/habitguard/user/{user_id}/intervention")
 def get_user_intervention(user_id: int):
     # Use daily totals for the same reason as the timer endpoint above.
-    usage_history = dataset_service.get_user_daily_total_usage(_get_dataset_df(), user_id)
+    usage_history = dataset_service.get_user_daily_total_usage(
+        _get_dataset_df(),
+        user_id
+    )
 
     if len(usage_history) == 0:
         return {
@@ -255,10 +258,13 @@ def get_user_intervention(user_id: int):
             "usage_status": "COLLECTING_BASELINE",
             "friction_type": "NONE",
             "recommended_timer_minutes": None,
+            "intervention_type": "NONE",
+            "should_intervene": False,
+            "decision_reason": "HabitGuard is still collecting baseline data.",
             "message": timer_result.get("message")
         }
 
-        return _build_intervention_response(
+    return _build_intervention_response(
         timer_result,
         extra_fields={"user_id": user_id},
         user_id=str(user_id)
