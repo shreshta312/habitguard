@@ -352,7 +352,7 @@ async function analyzeUsage() {
       throw new Error(`Backend returned ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = await parseApiResponse(response);
     const checkedAt = Date.now();
 
     await chrome.storage.local.set({
@@ -386,7 +386,7 @@ async function seedDemoData() {
   for (let i = 10; i >= 1; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
+    const key = getTodayKey(d);
     // Vary usage slightly so the baseline is not a flat line.
     demoUsage[key] = 20 + (i % 5);
   }

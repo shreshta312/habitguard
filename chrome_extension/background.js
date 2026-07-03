@@ -555,7 +555,7 @@ async function runJitaiCheck() {
       throw new Error(`Backend returned ${response.status}`);
     }
 
-    const intervention = await response.json();
+    const intervention = await parseApiResponse(response);
 
     await chrome.storage.local.set({
       latestIntervention: intervention,
@@ -673,7 +673,7 @@ async function sendFeedbackEvent(eventType, payload = {}) {
       body: JSON.stringify(body)
     });
 
-    const data = await response.json();
+    const data = await parseApiResponse(response);
 
     return {
       success: response.ok,
