@@ -9,7 +9,7 @@ from app.services.structural_timer_engine import StructuralTimerEngine
 from app.services.decision_engine import DecisionEngine
 from app.api.feedback import router as feedback_router
 from app.services.feedback_service import feedback_service
-
+from app.api.usage import router as usage_router
 
 app = FastAPI(
     title="HabitGuard API",
@@ -18,6 +18,7 @@ app = FastAPI(
 )
 
 app.include_router(feedback_router)
+app.include_router(usage_router)
 
 CSV_PATH = "../data/processed/cleaned_screen_time.csv"
 
