@@ -276,13 +276,13 @@ class DecisionEngine:
                 )
             }
 
-        # Global adaptation:
-        # If break acceptance is very low, reduce friction intensity.
+       # User-specific feedback adaptation:
+        # If this user's break acceptance is very low, reduce friction intensity.
         if break_acceptance_rate < 0.25:
             softened_friction = self._soften_friction(friction_type)
 
             return {
-                "usage_status": "FEEDBACK_SOFTENED_GLOBAL",
+                "usage_status": "FEEDBACK_SOFTENED_USER",
                 "friction_type": softened_friction,
                 "intervention_type": self._intervention_type_from_friction(softened_friction),
                 "should_intervene": softened_friction != "NONE",
@@ -292,12 +292,12 @@ class DecisionEngine:
                 ),
                 "decision_reason": (
                     decision_reason
-                    + f" Feedback adaptation softened friction because break acceptance rate is "
+                   + f" Feedback adaptation softened friction because this user's break acceptance rate is "
                     + f"{break_acceptance_rate}."
                 ),
                 "feedback_adaptation_used": True,
                 "feedback_adaptation_reason": (
-                    "Global break acceptance rate is low, so intervention was softened."
+                    "This user's recent break acceptance rate is low, so intervention was softened."
                 )
             }
 
