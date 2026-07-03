@@ -23,6 +23,11 @@ class DatasetService:
             subset=["user_id", "date", "app_name", "screen_time_min"]
         )
 
+        # Normalize once during loading instead of repeatedly casting
+        # inside every query method.
+        df["user_id"] = df["user_id"].astype(str)
+        df["app_name"] = df["app_name"].astype(str)
+
         df = df.sort_values(
             by=["user_id", "app_name", "date"]
         )
@@ -34,9 +39,12 @@ class DatasetService:
         Returns usage history for one user and one app, sorted by date.
         """
 
+        user_id = str(user_id)
+        app_name = str(app_name).lower()
+
         filtered_df = df[
-            (df["user_id"].astype(str) == str(user_id))
-            & (df["app_name"].str.lower() == app_name.lower())
+            (df["user_id"] == user_id)
+            & (df["app_name"].str.lower() == app_name)
         ]
 
         filtered_df = filtered_df.sort_values("date")
@@ -51,7 +59,9 @@ class DatasetService:
         addiction trajectory is better captured at the whole-device level.
         """
 
-        user_df = df[df["user_id"].astype(str) == str(user_id)]
+        user_id = str(user_id)
+
+        user_df = df[df["user_id"] == user_id]
 
         daily_usage = (
             user_df
@@ -64,7 +74,9 @@ class DatasetService:
         return daily_usage["screen_time_min"].tolist()
 
     def get_user_apps(self, df, user_id):
-        user_df = df[df["user_id"].astype(str) == str(user_id)]
+        user_id = str(user_id)
+
+        user_df = df[df["user_id"] == user_id]
 
         return sorted(user_df["app_name"].dropna().unique().tolist())
 

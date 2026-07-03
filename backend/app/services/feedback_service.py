@@ -8,6 +8,13 @@ from app.schemas.feedback_schema import FeedbackEvent
 
 
 class FeedbackService:
+    """
+    Stores and summarizes user feedback events.
+
+    For live intervention adaptation, summaries are bounded to recent events
+    so old feedback does not dominate forever and the decision loop stays fast.
+    """
+
     def __init__(self):
         self.data_dir = Path(__file__).resolve().parents[2] / "data"
         self.feedback_file = self.data_dir / "feedback_events.jsonl"
@@ -56,7 +63,7 @@ class FeedbackService:
 
         return events
 
-    def get_summary(self, user_id=None):
+    def get_summary(self, user_id=None, recent_limit=200):
         events = self.load_events()
 
         if user_id is not None:
@@ -64,6 +71,12 @@ class FeedbackService:
                 event for event in events
                 if str(event.get("user_id", "local_user")) == str(user_id)
             ]
+
+        # Use only recent feedback for live adaptation.
+        # This keeps the intervention loop responsive and prevents very old
+        # behavior from dominating current personalization.
+        if recent_limit is not None and recent_limit > 0:
+            events = events[-recent_limit:]
 
         total_events = len(events)
 
@@ -101,6 +114,7 @@ class FeedbackService:
 
         return {
             "user_id": user_id,
+            "recent_limit": recent_limit,
             "total_events": total_events,
             "event_type_counts": dict(event_type_counts),
             "overlay_dismissed_count": overlay_dismissed_count,
