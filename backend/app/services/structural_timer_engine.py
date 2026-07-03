@@ -157,6 +157,7 @@ class StructuralTimerEngine:
 
         rho is user-estimated. eta, zeta, gamma remain paper priors.
         """
+        rho_user = max(0.05, min(0.95, rho_user))
 
         denominator_adjustment = (
             -self.eta
