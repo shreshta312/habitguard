@@ -1,4 +1,5 @@
 const API_URL = "http://127.0.0.1:8000/habitguard/custom/intervention";
+const USAGE_SNAPSHOT_URL = "http://127.0.0.1:8000/usage/snapshot";
 
 const todayUsageEl = document.getElementById("todayUsage");
 const topDomainEl = document.getElementById("topDomain");
@@ -231,6 +232,66 @@ async function loadLatestIntervention() {
   renderResult(latestIntervention, latestInterventionCheckedAt);
 }
 
+async function sendUsageSnapshotFromPopup(latestIntervention = null) {
+  try {
+    const todayKey = getTodayKey();
+
+    const stored = await chrome.storage.local.get([
+      "dailyUsageMinutes",
+      "domainUsageMinutes",
+      "currentSession",
+      "sessionHistory",
+      "latestIntervention",
+      "activeInterventionTimer"
+    ]);
+
+    const body = {
+      user_id: "local_user",
+      date: todayKey,
+      daily_usage_minutes: stored.dailyUsageMinutes || {},
+      domain_usage_minutes: stored.domainUsageMinutes || {},
+      current_session: stored.currentSession || null,
+      session_history: stored.sessionHistory || [],
+      latest_intervention:
+        latestIntervention || stored.latestIntervention || null,
+      active_intervention_timer: stored.activeInterventionTimer || null,
+      source: "chrome_extension_popup"
+    };
+
+    const response = await fetch(USAGE_SNAPSHOT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+
+    const data = await response.json();
+
+    await chrome.storage.local.set({
+      lastPopupUsageSnapshotAt: Date.now(),
+      lastPopupUsageSnapshotResult: data
+    });
+
+    return {
+      success: response.ok,
+      data
+    };
+  } catch (error) {
+    console.error("HabitGuard popup usage snapshot failed:", error);
+
+    await chrome.storage.local.set({
+      lastPopupUsageSnapshotError: error.message,
+      lastPopupUsageSnapshotFailedAt: Date.now()
+    });
+
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
 async function analyzeUsage() {
   setLoading();
 
@@ -277,6 +338,7 @@ async function analyzeUsage() {
       latestIntervention: data,
       latestInterventionCheckedAt: checkedAt
     });
+    await sendUsageSnapshotFromPopup(data);
 
     renderResult(data, checkedAt);
     await refreshUsageDisplay();
