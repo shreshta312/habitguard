@@ -727,7 +727,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
   }
 
-  sendFeedbackEvent(eventType, payload).then(sendResponse);
+  sendFeedbackEvent(eventType, payload)
+    .then(async (feedbackResult) => {
+      await sendUsageSnapshot(null, {
+        force: true,
+        source: `chrome_extension_feedback_${eventType}`
+      });
+
+      return feedbackResult;
+    })
+    .then(sendResponse);
 
   return true;
 });

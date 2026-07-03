@@ -114,9 +114,8 @@ class UsageService:
         friction_type_counts = Counter()
 
         for snapshot in snapshots:
-            source = snapshot.get("source")
-            if source:
-                source_counts[source] += 1
+            source = snapshot.get("source") or "unknown_source"
+            source_counts[source] += 1
 
             daily_usage_minutes = snapshot.get("daily_usage_minutes", {}) or {}
             for date_key, minutes in daily_usage_minutes.items():
@@ -140,9 +139,14 @@ class UsageService:
 
             intervention = snapshot.get("latest_intervention") or {}
 
-            intervention_type = intervention.get("intervention_type")
-            usage_status = intervention.get("usage_status")
-            friction_type = intervention.get("friction_type")
+            if isinstance(intervention, dict):
+             intervention_type = intervention.get("intervention_type")
+             usage_status = intervention.get("usage_status")
+             friction_type = intervention.get("friction_type")
+            else:
+             intervention_type = None
+             usage_status = None
+             friction_type = None
 
             if intervention_type:
                 intervention_type_counts[intervention_type] += 1
