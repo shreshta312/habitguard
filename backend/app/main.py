@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from app.services.habitguard_service import HabitGuardService
 from app.services.dataset_service import DatasetService
@@ -217,10 +217,10 @@ def get_structural_timer(user_id: int):
     usage_history = dataset_service.get_user_daily_total_usage(_get_dataset_df(), user_id)
 
     if len(usage_history) == 0:
-        return {
-            "user_id": user_id,
-            "error": "User not found or no usage data available"
-        }
+        raise HTTPException(
+         status_code=404,
+           detail="User not found or no usage data available"
+        )
 
     result = structural_timer_engine.get_structural_timer_summary(
         usage_history_minutes=usage_history
@@ -241,10 +241,10 @@ def get_user_intervention(user_id: int):
     )
 
     if len(usage_history) == 0:
-        return {
-            "user_id": user_id,
-            "error": "User not found or no usage data available"
-        }
+       raise HTTPException(
+           status_code=404,
+           detail="User not found or no usage data available"
+        )
 
     timer_result = structural_timer_engine.get_structural_timer_summary(
         usage_history_minutes=usage_history
