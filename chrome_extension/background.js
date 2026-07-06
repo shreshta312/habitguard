@@ -1,5 +1,6 @@
 const API_URL = "http://127.0.0.1:8000/habitguard/custom/intervention";
 const USAGE_SNAPSHOT_URL = "http://127.0.0.1:8000/usage/snapshot";
+const USAGE_HISTORY_URL = "http://127.0.0.1:8000/usage/daily-history/local_user";
 
 const USAGE_SNAPSHOT_THROTTLE_MS = 2 * 60 * 1000;
 const TRACKING_ALARM_NAME = "habitguard_usage_tracker";
@@ -252,8 +253,32 @@ async function incrementUsageMinute() {
 
 async function getDailyUsageHistory() {
   const { dailyUsageMinutes } = await getStoredUsage();
-  const dates = Object.keys(dailyUsageMinutes).sort();
-  return dates.map((date) => dailyUsageMinutes[date]);
+
+  const mergedUsage = {
+    ...dailyUsageMinutes
+  };
+
+  try {
+    const response = await fetch(USAGE_HISTORY_URL);
+
+    if (response.ok) {
+      const backendHistory = await parseApiResponse(response);
+
+      const dailyHistory = backendHistory.daily_usage_history || [];
+
+      dailyHistory.forEach((item) => {
+        if (item.date) {
+          mergedUsage[item.date] = Number(item.minutes || 0);
+        }
+      });
+    }
+  } catch (error) {
+    console.warn("Could not load backend usage history. Using local history only.", error);
+  }
+
+  const dates = Object.keys(mergedUsage).sort();
+
+  return dates.map((date) => mergedUsage[date]);
 }
 
 function shouldTriggerNotification(intervention) {
@@ -264,6 +289,7 @@ function shouldTriggerNotification(intervention) {
   const frictionType = intervention.friction_type;
 
   return (
+    frictionType === "SOFT_WARNING" ||
     frictionType === "TIMER_WARNING" ||
     frictionType === "STRONG_FRICTION"
   );
@@ -360,13 +386,15 @@ function shouldTriggerOverlay(intervention, currentSession) {
   const category = currentSession.category;
   const sessionMinutes = currentSession.sessionMinutes || 0;
 
+  const riskyTemptationSession =
+    category === "temptation" && sessionMinutes >= 10;
+
   const strongEnough =
-    frictionType === "STRONG_FRICTION" || frictionType === "TIMER_WARNING";
+    frictionType === "STRONG_FRICTION" ||
+    frictionType === "TIMER_WARNING" ||
+    (frictionType === "SOFT_WARNING" && riskyTemptationSession);
 
-  const riskyContext =
-    category === "temptation" && sessionMinutes >= 3;
-
-  return shouldIntervene && strongEnough && riskyContext;
+  return shouldIntervene && strongEnough && riskyTemptationSession;
 }
 
 async function sendOverlayToActiveTab(intervention, currentSession) {

@@ -329,7 +329,9 @@ class StructuralTimerEngine:
         natural_was_negative = predicted_natural_usage_hours_raw < 0
         target_was_negative = recommended_target_usage_hours_raw < 0
 
-        if natural_was_negative:
+        EPSILON_HOURS = 0.01  # 0.6 minutes
+
+        if natural_was_negative and abs(predicted_natural_usage_hours_raw) > EPSILON_HOURS:
             logger.warning(
                 "StructuralTimerEngine: predicted_natural_usage went negative "
                 "(%.4f hrs) before clamping. rho_user=%.4f, xi_user=%.4f, "
@@ -340,7 +342,7 @@ class StructuralTimerEngine:
                 current_habit_stock
             )
 
-        if target_was_negative:
+        if target_was_negative and abs(recommended_target_usage_hours_raw) > EPSILON_HOURS:
             logger.warning(
                 "StructuralTimerEngine: recommended_target_usage went negative "
                 "(%.4f hrs) before clamping. rho_user=%.4f, xi_user=%.4f, "

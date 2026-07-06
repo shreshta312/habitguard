@@ -120,15 +120,18 @@ class DecisionEngine:
 
         if feedback_summary is not None:
             adapted = self._apply_feedback_adaptation(
-                usage_status=usage_status,
-                friction_type=friction_type,
-                intervention_type=intervention_type,
-                should_intervene=should_intervene,
-                message=message,
-                decision_reason=decision_reason,
+               usage_status=usage_status,
+              friction_type=friction_type,
+             intervention_type=intervention_type,
+              should_intervene=should_intervene,
+               message=message,
+              decision_reason=decision_reason,
                 current_domain=current_domain,
-                feedback_summary=feedback_summary
-            )
+              current_category=current_category,
+              session_minutes=session_minutes,
+              overuse_gap=overuse_gap,
+             feedback_summary=feedback_summary
+          )
 
             usage_status = adapted["usage_status"]
             friction_type = adapted["friction_type"]
@@ -167,16 +170,20 @@ class DecisionEngine:
         return response
 
     def _apply_feedback_adaptation(
-        self,
-        usage_status,
-        friction_type,
-        intervention_type,
-        should_intervene,
-        message,
-        decision_reason,
-        current_domain,
-        feedback_summary
-    ):
+     self,
+     usage_status,
+     friction_type,
+     intervention_type,
+     should_intervene,
+     message,
+     decision_reason,
+     current_domain,
+     current_category,
+     session_minutes,
+     overuse_gap,
+     feedback_summary
+     
+ ):
         if not should_intervene:
             return {
                 "usage_status": usage_status,
@@ -276,15 +283,38 @@ class DecisionEngine:
                 )
             }
 
-       # User-specific feedback adaptation:
+            # User-specific feedback adaptation:
         # If this user's break acceptance is very low, reduce friction intensity.
+        # But do NOT fully suppress interventions during severe overuse or
+        # temptation-site sessions.
         if break_acceptance_rate < 0.25:
-            softened_friction = self._soften_friction(friction_type)
+            severe_overuse = overuse_gap >= 30
+            temptation_session = (
+                current_category == "temptation"
+                and session_minutes >= 10
+            )
+
+            if severe_overuse or temptation_session:
+                if friction_type == "STRONG_FRICTION":
+                    softened_friction = "TIMER_WARNING"
+                elif friction_type == "TIMER_WARNING":
+                    softened_friction = "SOFT_WARNING"
+                else:
+                    softened_friction = friction_type
+
+                # During severe overuse, never allow adaptation to fully erase
+                # the intervention.
+                if softened_friction == "NONE":
+                    softened_friction = "SOFT_WARNING"
+            else:
+                softened_friction = self._soften_friction(friction_type)
 
             return {
                 "usage_status": "FEEDBACK_SOFTENED_USER",
                 "friction_type": softened_friction,
-                "intervention_type": self._intervention_type_from_friction(softened_friction),
+                "intervention_type": self._intervention_type_from_friction(
+                    softened_friction
+                ),
                 "should_intervene": softened_friction != "NONE",
                 "message": (
                     "HabitGuard is keeping this intervention gentler because recent break prompts "
@@ -292,12 +322,12 @@ class DecisionEngine:
                 ),
                 "decision_reason": (
                     decision_reason
-                   + f" Feedback adaptation softened friction because this user's break acceptance rate is "
-                    + f"{break_acceptance_rate}."
+                    + f" Feedback adaptation softened friction because this user's break acceptance rate is "
+                    + f"{break_acceptance_rate}. Severe overuse or temptation-session interventions are not fully suppressed."
                 ),
                 "feedback_adaptation_used": True,
                 "feedback_adaptation_reason": (
-                    "This user's recent break acceptance rate is low, so intervention was softened."
+                    "Break acceptance rate is low, so friction was softened but not fully removed."
                 )
             }
 

@@ -1,5 +1,6 @@
 const API_URL = "http://127.0.0.1:8000/habitguard/custom/intervention";
 const USAGE_SNAPSHOT_URL = "http://127.0.0.1:8000/usage/snapshot";
+const USAGE_HISTORY_URL = "http://127.0.0.1:8000/usage/daily-history/local_user";
 
 const todayUsageEl = document.getElementById("todayUsage");
 const topDomainEl = document.getElementById("topDomain");
@@ -84,9 +85,31 @@ async function getStoredUsage() {
 async function getDailyUsageHistory() {
   const { dailyUsageMinutes } = await getStoredUsage();
 
-  const dates = Object.keys(dailyUsageMinutes).sort();
+  const mergedUsage = {
+    ...dailyUsageMinutes
+  };
 
-  return dates.map((date) => dailyUsageMinutes[date]);
+  try {
+    const response = await fetch(USAGE_HISTORY_URL);
+
+    if (response.ok) {
+      const backendHistory = await parseApiResponse(response);
+
+      const dailyHistory = backendHistory.daily_usage_history || [];
+
+      dailyHistory.forEach((item) => {
+        if (item.date) {
+          mergedUsage[item.date] = Number(item.minutes || 0);
+        }
+      });
+    }
+  } catch (error) {
+    console.warn("Could not load backend usage history. Using local history only.", error);
+  }
+
+  const dates = Object.keys(mergedUsage).sort();
+
+  return dates.map((date) => mergedUsage[date]);
 }
 
 function getTopDomainForToday(domainUsageMinutes) {

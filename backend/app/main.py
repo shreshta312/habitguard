@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import pandas as pd
 from app.services.habitguard_service import HabitGuardService
 from app.services.dataset_service import DatasetService
 from app.services.anomaly_service import AnomalyService
@@ -15,6 +17,17 @@ app = FastAPI(
     title="HabitGuard API",
     description="Backend API for addiction score, dynamic limits, and usage monitoring",
     version="1.0.0"  
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(feedback_router)
@@ -133,6 +146,158 @@ def get_apps():
     return {
         "total_apps": len(apps),
         "apps": apps
+    }
+
+@app.get("/habitguard/dashboard/{user_id}")
+def get_dashboard_data(user_id: int):
+    df = _get_dataset_df()
+
+    user_df = df[df["user_id"].astype(str) == str(user_id)].copy()
+
+    if user_df.empty:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found or no usage data available"
+        )
+
+    user_df["date"] = pd.to_datetime(user_df["date"])
+
+    daily_usage_df = (
+        user_df.groupby("date")["screen_time_min"]
+        .sum()
+        .reset_index()
+        .sort_values("date")
+    )
+
+    daily_usage_history = daily_usage_df["screen_time_min"].tolist()
+
+    if len(daily_usage_history) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="No daily usage history available"
+        )
+
+    latest_date = daily_usage_df["date"].max()
+    today_df = user_df[user_df["date"] == latest_date]
+
+    today_usage_minutes = round(float(daily_usage_history[-1]), 2)
+
+    weekly_usage = []
+    for _, row in daily_usage_df.tail(7).iterrows():
+        weekly_usage.append({
+            "date": row["date"].strftime("%Y-%m-%d"),
+            "day": row["date"].strftime("%a"),
+            "minutes": round(float(row["screen_time_min"]), 2)
+        })
+
+    top_apps_df = (
+        today_df.groupby("app_name")["screen_time_min"]
+        .sum()
+        .reset_index()
+        .sort_values("screen_time_min", ascending=False)
+        .head(5)
+    )
+
+    top_apps = [
+        {
+            "app_name": row["app_name"],
+            "minutes": round(float(row["screen_time_min"]), 2)
+        }
+        for _, row in top_apps_df.iterrows()
+    ]
+
+    category_usage_df = (
+        today_df.groupby("category")["screen_time_min"]
+        .sum()
+        .reset_index()
+        .sort_values("screen_time_min", ascending=False)
+    )
+
+    category_usage = [
+        {
+            "category": row["category"],
+            "minutes": round(float(row["screen_time_min"]), 2)
+        }
+        for _, row in category_usage_df.iterrows()
+    ]
+
+    productive_minutes = round(
+        float(today_df[today_df["is_productive"] == 1]["screen_time_min"].sum()),
+        2
+    )
+
+    distracting_minutes = round(
+        float(today_df[today_df["is_productive"] == 0]["screen_time_min"].sum()),
+        2
+    )
+
+    timer_result = structural_timer_engine.get_structural_timer_summary(
+        usage_history_minutes=daily_usage_history
+    )
+
+    legacy_summary = habitguard_service.get_user_daily_summary(user_id)
+
+    launches_today = int(today_df["launches"].sum())
+    interactions_today = int(today_df["interactions"].sum())
+
+    is_productive_today = 1 if productive_minutes >= distracting_minutes else 0
+
+    anomaly_result = anomaly_service.detect_anomaly(
+        screen_time_min=today_usage_minutes,
+        launches=launches_today,
+        interactions=interactions_today,
+        is_productive=is_productive_today
+    )
+
+    if len(daily_usage_history) >= 3:
+        forecast_minutes = round(
+            float(sum(daily_usage_history[-3:]) / 3),
+            2
+        )
+        forecast_source = "temporary_3_day_average_until_forecaster_service_is_connected"
+    else:
+        forecast_minutes = today_usage_minutes
+        forecast_source = "not_enough_history_using_today_usage"
+
+    return {
+        "user_id": user_id,
+        "date": latest_date.strftime("%Y-%m-%d"),
+
+        "today_usage_minutes": today_usage_minutes,
+        "productive_minutes": productive_minutes,
+        "distracting_minutes": distracting_minutes,
+
+        "risk": {
+            "source": "legacy_addiction_score_summary",
+            "score": legacy_summary.get("current_score"),
+            "level": legacy_summary.get("score_level"),
+            "note": "This is the legacy score. The ML risk classifier needs profile features before it can be used here."
+        },
+
+        "anomaly": anomaly_result,
+
+        "forecast": {
+            "forecast_minutes": forecast_minutes,
+            "source": forecast_source,
+            "note": "Next step is to connect the saved usage_forecaster.pkl model properly."
+        },
+
+        "structural_timer": timer_result,
+
+        "weekly_usage": weekly_usage,
+        "top_apps": top_apps,
+        "category_usage": category_usage,
+
+        "dashboard_cards": {
+           "total_usage": today_usage_minutes,
+            "risk_level": legacy_summary.get("score_level"),
+            "recommended_timer": timer_result.get("recommended_timer_minutes"),
+            "anomaly_status": anomaly_result.get(
+               "result",
+             anomaly_result.get("status", anomaly_result.get("prediction", "UNKNOWN"))
+            ),
+         "forecast_minutes": forecast_minutes
+        }
     }
 
 

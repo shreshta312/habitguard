@@ -38,3 +38,13 @@ def get_usage_summary(user_id: str):
             status_code=500,
             detail=f"Failed to load usage summary: {str(e)}"
         )
+
+@router.get("/daily-history/{user_id}")
+def get_daily_usage_history(user_id: str):
+    try:
+        return usage_service.get_daily_usage_history(user_id=user_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load daily usage history: {str(e)}"
+        )
