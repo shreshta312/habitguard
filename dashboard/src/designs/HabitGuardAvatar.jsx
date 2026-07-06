@@ -540,6 +540,46 @@ function DomainRow({ item, index, accents }) {
   );
 }
 
+function toTitleCaseName(name) {
+  if (!name) {
+    return "there";
+  }
+
+  return name
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function getTimeBasedGreeting() {
+  const hour = new Date().getHours();
+
+  if (hour >= 5 && hour < 12) {
+    return "Good morning";
+  }
+
+  if (hour >= 12 && hour < 17) {
+    return "Good afternoon";
+  }
+
+  if (hour >= 17 && hour < 21) {
+    return "Good evening";
+  }
+
+  return "Good night";
+}
+
+function getDisplayName() {
+  const savedName = localStorage.getItem("habitguard_display_name");
+  const envName = import.meta.env.VITE_USER_DISPLAY_NAME;
+
+  const rawName = savedName || envName || "there";
+
+  return toTitleCaseName(rawName);
+}
+
 export default function HabitGuardDashboard() {
   const [theme, setTheme] = useState("light");
   const [dashboardData, setDashboardData] = useState(null);
@@ -554,6 +594,9 @@ export default function HabitGuardDashboard() {
   const [greetingEmoji] = useState(() => {
     return GREETING_EMOJIS[Math.floor(Math.random() * GREETING_EMOJIS.length)];
   });
+
+  const greeting = getTimeBasedGreeting();
+  const displayName = getDisplayName();
 
   useEffect(() => {
     let cancelled = false;
@@ -732,7 +775,7 @@ export default function HabitGuardDashboard() {
         <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="hg-display text-2xl font-medium md:text-3xl">
-              Good morning, Shreshta {greetingEmoji}
+              {greeting}, {displayName} {greetingEmoji}
             </h1>
 
             <p className="mt-1 text-sm" style={{ color: "var(--text-dim)" }}>
