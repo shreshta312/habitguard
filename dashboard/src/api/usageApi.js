@@ -84,14 +84,29 @@ function normalizeObject(value) {
   return value;
 }
 
-export async function fetchUsageSummary() {
-  const response = await fetch(`${API_BASE_URL}/usage/summary/local_user`);
+async function readJsonResponse(response) {
+  const text = await response.text();
 
   if (!response.ok) {
-    throw new Error(`Backend returned ${response.status}`);
+    throw new Error(`Backend returned ${response.status}: ${text.slice(0, 120)}`);
   }
 
-  const raw = await response.json();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      `Expected JSON but received: ${text.slice(0, 120)}. Check VITE_API_BASE_URL.`
+    );
+  }
+}
+
+export async function fetchUsageSummary() {
+  const url = `${API_BASE_URL}/usage/summary/local_user`;
+
+  console.log("HabitGuard API URL:", url);
+
+  const response = await fetch(url);
+  const raw = await readJsonResponse(response);
 
   const todayTotalMinutes = toNumber(
     firstDefined(
