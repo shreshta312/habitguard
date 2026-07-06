@@ -594,11 +594,11 @@ async function runJitaiCheck() {
 
     await updateBadge(intervention);
 
-    if (shouldTriggerNotification(intervention)) {
+    if (intervention.should_notify) {
       await showInterventionNotification(intervention);
     }
 
-    if (shouldTriggerOverlay(intervention, currentSession)) {
+    if (intervention.should_overlay) {
       const overlayCooldownActive = await isOverlayCooldownActive(
         currentSession?.domain
       );
@@ -767,4 +767,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .then(sendResponse);
 
   return true;
+});
+
+chrome.notifications.onClicked.addListener((notificationId) => {
+  chrome.notifications.clear(notificationId);
+
+  chrome.tabs.create({
+    url: chrome.runtime.getURL("popup.html"),
+  });
+});
+chrome.notifications.onClicked.addListener((notificationId) => {
+  chrome.notifications.clear(notificationId);
+
+  chrome.tabs.create({
+    url: chrome.runtime.getURL("popup.html"),
+  });
 });

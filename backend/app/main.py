@@ -107,7 +107,13 @@ def _build_intervention_response(
     StructuralTimerEngine computes the personalized timer.
     DecisionEngine decides how that timer should be translated into
     an intervention using live Chrome context and feedback history.
+
+    Then the JITAI delivery policy decides whether this intervention
+    should be shown as a notification, overlay, or dashboard-only signal.
     """
+
+    if context is None:
+        context = {}
 
     feedback_summary = feedback_service.get_summary(user_id=user_id)
 
@@ -120,7 +126,141 @@ def _build_intervention_response(
     if extra_fields:
         response = {**extra_fields, **response}
 
+    delivery_policy = build_delivery_policy(
+        intervention_result=response,
+        context=context
+    )
+
+    response.update(delivery_policy)
+
     return response
+
+def build_delivery_policy(intervention_result, context):
+    """
+    JITAI delivery policy.
+
+    This decides whether the intervention should be delivered as:
+    - dashboard-only
+    - Chrome notification
+    - page overlay
+
+    It uses situation/context, not hardcoded domain names.
+    """
+
+    if not intervention_result:
+        return {
+            "should_notify": False,
+            "should_overlay": False,
+            "cooldown_minutes": 30,
+            "delivery_reason": "No intervention result available."
+        }
+
+    should_intervene = bool(intervention_result.get("should_intervene", False))
+    friction_type = str(intervention_result.get("friction_type", "NONE")).upper()
+
+    current_category = str(
+        context.get("current_category", "neutral")
+    ).lower()
+
+    try:
+        session_minutes = float(context.get("session_minutes", 0) or 0)
+    except (TypeError, ValueError):
+        session_minutes = 0.0
+
+    try:
+        overuse_gap = float(
+            intervention_result.get("overuse_gap_minutes", 0) or 0
+        )
+    except (TypeError, ValueError):
+        overuse_gap = 0.0
+
+    if not should_intervene or friction_type == "NONE":
+        return {
+            "should_notify": False,
+            "should_overlay": False,
+            "cooldown_minutes": 30,
+            "delivery_reason": "No active intervention is needed right now."
+        }
+
+    is_temptation_context = current_category == "temptation"
+    is_mixed_context = current_category == "mixed"
+    is_productive_context = current_category == "productive"
+
+    severe_overuse = overuse_gap >= 45
+    moderate_overuse = overuse_gap >= 15
+
+    long_session = session_minutes >= 20
+    very_long_session = session_minutes >= 45
+
+    strong_friction = friction_type in {
+        "TIMER_WARNING",
+        "STRONG_FRICTION",
+    }
+
+    soft_friction = friction_type == "SOFT_WARNING"
+
+    # Productive work should not be interrupted unless overuse is severe.
+    if is_productive_context and not severe_overuse:
+        return {
+            "should_notify": False,
+            "should_overlay": False,
+            "cooldown_minutes": 45,
+            "delivery_reason": (
+                "Current context appears productive, so HabitGuard keeps this as dashboard-only."
+            )
+        }
+
+    # Temptation + long enough session is the most appropriate JITAI moment.
+    if is_temptation_context and session_minutes >= 10:
+        return {
+            "should_notify": True,
+            "should_overlay": strong_friction or severe_overuse,
+            "cooldown_minutes": 25,
+            "delivery_reason": (
+                "Temptation context with sustained session and overuse detected."
+            )
+        }
+
+    # Mixed context should be less interruptive.
+    if is_mixed_context:
+        if very_long_session and (strong_friction or severe_overuse):
+            return {
+                "should_notify": True,
+                "should_overlay": False,
+                "cooldown_minutes": 35,
+                "delivery_reason": (
+                    "Mixed context has become very long, so a gentle notification is appropriate."
+                )
+            }
+
+        return {
+            "should_notify": False,
+            "should_overlay": False,
+            "cooldown_minutes": 35,
+            "delivery_reason": (
+                "Mixed context detected, so HabitGuard avoids interrupting too early."
+            )
+        }
+
+    # Neutral context: notify only if overuse is meaningful and session is long.
+    if moderate_overuse and long_session and (soft_friction or strong_friction):
+        return {
+            "should_notify": True,
+            "should_overlay": False,
+            "cooldown_minutes": 30,
+            "delivery_reason": (
+                "Neutral context with sustained usage and overuse detected."
+            )
+        }
+
+    return {
+        "should_notify": False,
+        "should_overlay": False,
+        "cooldown_minutes": 30,
+        "delivery_reason": (
+            "Intervention exists, but this is not an appropriate interruption moment yet."
+        )
+    }
 
 @app.get("/")
 def home():
