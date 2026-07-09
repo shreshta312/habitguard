@@ -9,19 +9,29 @@
 
 <body>
   <div class="container">
-    <h1>HabitGuard</h1>
+    <div class="header-row">
+      <h1>HabitGuard</h1>
+      <button id="themeToggleBtn" class="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">
+        <span class="theme-icon-sun">☀️</span>
+        <span class="theme-icon-moon" style="display:none">🌙</span>
+      </button>
+    </div>
 
     <p class="subtitle">Live Chrome usage intervention</p>
 
+    <!-- Demo mode banner — hidden by default, shown via JS when active -->
+    <div id="demoBanner" class="demo-banner" style="display:none">
+      🧪 Demo Mode — showing simulated data. Click <strong>Exit Demo</strong> or <strong>Refresh</strong> to return to live tracking.
+    </div>
+
     <div class="button-grid">
       <button id="analyzeBtn">Analyze Usage</button>
-      <button id="seedBtn">Seed Demo</button>
-      <button id="resetBtn">Reset Data</button>
+      <button id="seedBtn">Enter Demo</button>
       <button id="refreshBtn">Refresh</button>
     </div>
 
     <div class="card">
-      <p class="label">Today’s Tracked Usage</p>
+      <p class="label">Today's Tracked Usage</p>
       <p id="todayUsage" class="value">Loading...</p>
     </div>
 
@@ -65,6 +75,12 @@
       <p id="timer" class="value">Waiting...</p>
     </div>
 
+    <div class="card small-card" id="deliveryCard" style="display:none">
+      <p class="label">JITAI Delivery Policy</p>
+      <p id="deliveryDetails" class="details"></p>
+      <p id="deliveryReason" class="details" style="opacity:0.7;margin-top:4px"></p>
+    </div>
+
     <div class="card small-card">
       <p class="label">Intervention Action</p>
       <p id="actionStatus" class="details">No active timer.</p>
@@ -86,6 +102,36 @@
     </p>
   </div>
 
+  <!-- Onboarding overlay -->
+  <div id="onboardingOverlay" class="onboarding-overlay" style="display:none">
+    <div class="onboarding-card">
+      <div class="onboarding-steps">
+        <div class="onboarding-step" data-step="1">
+          <div class="onboarding-emoji">🛡️</div>
+          <h2>Welcome to HabitGuard!</h2>
+          <p>Your personal digital well-being companion. HabitGuard watches your browsing patterns and gently nudges you when you're overusing temptation sites.</p>
+        </div>
+        <div class="onboarding-step" data-step="2" style="display:none">
+          <div class="onboarding-emoji">📊</div>
+          <h2>How It Works</h2>
+          <p>HabitGuard tracks your daily Chrome usage in the background, compares it to your personal baseline, and delivers just-in-time interventions when it detects overuse patterns.</p>
+        </div>
+        <div class="onboarding-step" data-step="3" style="display:none">
+          <div class="onboarding-emoji">🚀</div>
+          <h2>You're All Set!</h2>
+          <p>Browse normally and click <strong>Analyze Usage</strong> after a few minutes to see your first intervention result. You can also categorize sites and set break timers.</p>
+        </div>
+      </div>
+      <div class="onboarding-dots">
+        <span class="onboarding-dot active" data-dot="1"></span>
+        <span class="onboarding-dot" data-dot="2"></span>
+        <span class="onboarding-dot" data-dot="3"></span>
+      </div>
+      <button id="onboardingNextBtn" class="onboarding-btn">Next</button>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
   <script src="popup.js"></script>
 </body>
 

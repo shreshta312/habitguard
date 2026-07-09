@@ -192,5 +192,9 @@ export async function fetchUsageSummary() {
         raw.events
       )
     ),
+
+    // ML model outputs from backend
+    anomaly: normalizeObject(firstDefined(raw.anomaly, raw.anomaly_result)),
+    forecast: normalizeObject(firstDefined(raw.forecast, raw.forecast_result)),
   };
 }

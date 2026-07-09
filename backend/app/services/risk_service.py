@@ -1,9 +1,15 @@
 import pickle
-import pandas as pd
 from pathlib import Path
 
+import pandas as pd
 
-MODEL_PATH = Path("../ml/saved_models/risk_classifier.pkl")
+
+MODEL_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "ml"
+    / "saved_models"
+    / "risk_classifier.pkl"
+)
 
 
 class RiskService:
@@ -30,14 +36,17 @@ class RiskService:
             result = "LOW ADDICTION RISK"
 
         return {
-          "model_role": "supporting_dashboard_analytics",
-           "used_in_live_intervention_loop": False,
+            "model_role": "supporting_dashboard_analytics",
+            "used_in_live_intervention_loop": False,
             "analytics_purpose": (
-            "Estimates overall addiction risk for dashboard awareness. "
-            "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
-           ),
-           "prediction": int(prediction),
+                "Estimates overall addiction risk for dashboard awareness. "
+                "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
+            ),
+            "prediction": int(prediction),
             "risk_result": result,
             "not_addicted_probability": round(probability[0] * 100, 2),
-          "addicted_probability": round(probability[1] * 100, 2)
+            "addicted_probability": round(probability[1] * 100, 2),
         }
+
+
+risk_service = RiskService()

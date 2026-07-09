@@ -12,6 +12,8 @@ from app.services.decision_engine import DecisionEngine
 from app.api.feedback import router as feedback_router
 from app.services.feedback_service import feedback_service
 from app.api.usage import router as usage_router
+from app.services.diagnostics_service import get_diagnostics
+
 
 app = FastAPI(
     title="HabitGuard API",
@@ -267,6 +269,12 @@ def home():
     return {
         "message": "HabitGuard API is running"
     }
+
+
+@app.get("/diagnostics")
+def diagnostics():
+    """Returns metadata and diagnostics for all loaded ML models."""
+    return get_diagnostics()
 
 
 @app.get("/users")

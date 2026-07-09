@@ -1,9 +1,15 @@
 import pickle
-import pandas as pd
 from pathlib import Path
 
+import pandas as pd
 
-MODEL_PATH = Path("../ml/saved_models/user_segmentation.pkl")
+
+MODEL_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "ml"
+    / "saved_models"
+    / "user_segmentation.pkl"
+)
 
 
 class SegmentService:
@@ -19,27 +25,28 @@ class SegmentService:
             )
 
     def get_segment_name(self, features):
-        """
-        Heuristic segment label based on scaled feature values.
-
-        Thresholds (0.8, 0.5, -0.8) are relative to the standard-scaled
-        feature space used during model training. These are not raw hours.
-        """
-
-        if features["daily_screen_time_hours"] > 0.8 and features["social_media_hours"] > 0.8:
+        if (
+            features["daily_screen_time_hours"] > 0.8
+            and features["social_media_hours"] > 0.8
+        ):
             return "Heavy Social User"
 
-        elif features["gaming_hours"] > 0.8:
+        if features["gaming_hours"] > 0.8:
             return "Gaming Heavy User"
 
-        elif features["work_study_hours"] > 0.8 and features["daily_screen_time_hours"] < 0.5:
+        if (
+            features["work_study_hours"] > 0.8
+            and features["daily_screen_time_hours"] < 0.5
+        ):
             return "Productivity Focused User"
 
-        elif features["sleep_hours"] < -0.8 and features["daily_screen_time_hours"] > 0.5:
+        if (
+            features["sleep_hours"] < -0.8
+            and features["daily_screen_time_hours"] > 0.5
+        ):
             return "Late Night / High Usage User"
 
-        else:
-            return "Balanced User"
+        return "Balanced User"
 
     def predict_segment(self, features):
         sample = pd.DataFrame([features])
@@ -48,12 +55,15 @@ class SegmentService:
         segment_name = self.get_segment_name(features)
 
         return {
-         "model_role": "supporting_dashboard_analytics",
-         "used_in_live_intervention_loop": False,
-         "analytics_purpose": (
-         "Groups users into behavior segments for dashboard personalization. "
-         "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
-         ),
-          "cluster": int(cluster),
-          "segment_name": segment_name
+            "model_role": "supporting_dashboard_analytics",
+            "used_in_live_intervention_loop": False,
+            "analytics_purpose": (
+                "Groups users into behavior segments for dashboard personalization. "
+                "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
+            ),
+            "cluster": int(cluster),
+            "segment_name": segment_name,
         }
+
+
+segment_service = SegmentService()

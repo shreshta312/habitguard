@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.schemas.feedback_schema import FeedbackEvent
+from app.services.database import db_manager
 
 
 class FeedbackService:
@@ -16,9 +17,7 @@ class FeedbackService:
     """
 
     def __init__(self):
-        self.data_dir = Path(__file__).resolve().parents[2] / "data"
-        self.feedback_file = self.data_dir / "feedback_events.jsonl"
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        pass
 
     def save_event(self, event: FeedbackEvent):
         event_id = str(uuid.uuid4())
@@ -29,13 +28,25 @@ class FeedbackService:
             payload = event.dict()
 
         payload["event_id"] = event_id
-        payload["server_received_at"] = datetime.now(timezone.utc).isoformat()
+        
+        now = datetime.now(timezone.utc).isoformat()
+        payload["server_received_at"] = now
 
         if not payload.get("timestamp"):
-            payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+            payload["timestamp"] = now
 
-        with open(self.feedback_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, default=str) + "\n")
+        user_id = payload.get("user_id", "local_user")
+        event_type = payload.get("event_type", "unknown")
+        timestamp = payload.get("timestamp")
+
+        db_manager.save_feedback_event(
+            event_id=event_id,
+            user_id=user_id,
+            event_type=event_type,
+            timestamp=timestamp,
+            server_received_at=now,
+            payload=payload
+        )
 
         return {
             "success": True,
@@ -44,24 +55,7 @@ class FeedbackService:
         }
 
     def load_events(self):
-        if not self.feedback_file.exists():
-            return []
-
-        events = []
-
-        with open(self.feedback_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-
-                if not line:
-                    continue
-
-                try:
-                    events.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
-        return events
+        return db_manager.load_feedback_events()
 
     def get_summary(self, user_id=None, recent_limit=200):
         events = self.load_events()

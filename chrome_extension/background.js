@@ -1,6 +1,8 @@
-const API_URL = "http://127.0.0.1:8000/habitguard/custom/intervention";
-const USAGE_SNAPSHOT_URL = "http://127.0.0.1:8000/usage/snapshot";
-const USAGE_HISTORY_URL = "http://127.0.0.1:8000/usage/daily-history/local_user";
+importScripts("config.js");
+
+const API_URL = `${API_BASE_URL}/habitguard/custom/intervention`;
+const USAGE_SNAPSHOT_URL = `${API_BASE_URL}/usage/snapshot`;
+const USAGE_HISTORY_URL = `${API_BASE_URL}/usage/daily-history/local_user`;
 
 const USAGE_SNAPSHOT_THROTTLE_MS = 2 * 60 * 1000;
 const TRACKING_ALARM_NAME = "habitguard_usage_tracker";
@@ -12,15 +14,13 @@ const OVERLAY_COOLDOWN_MINUTES = 20;
 const SESSION_GAP_RESET_MINUTES = 3;
 const MAX_SESSION_HISTORY = 50;
 
-// Set to true during development to enable verbose console logging.
 const DEBUG = false;
+
+let jitaiRunning = false;
 
 function debugLog(...args) {
   if (DEBUG) console.log(...args);
 }
-
-// Concurrency guard: prevents overlapping JITAI fetch calls.
-let jitaiRunning = false;
 
 function getTodayKey(date = new Date()) {
   const year = date.getFullYear();
@@ -150,14 +150,6 @@ function closeCurrentSession(currentSession, sessionHistory, endedAt) {
   return updatedHistory.slice(0, MAX_SESSION_HISTORY);
 }
 
-// Accepts current state from the caller so this function never reads storage
-// itself. This lets incrementUsageMinute merge all writes into a single
-// chrome.storage.local.set call, eliminating the read-write race.
-//
-// Note on gap time: when a session expires (domain changed or gap >
-// SESSION_GAP_RESET_MINUTES), elapsed gap time is not credited to the closing
-// session's durationMinutes. This is intentional — gap time means the user
-// was away, so crediting it would inflate session length.
 function computeSessionUpdate(domain, category, currentSession, sessionHistory) {
   const now = Date.now();
 
@@ -179,7 +171,12 @@ function computeSessionUpdate(domain, category, currentSession, sessionHistory) 
   const sessionExpired = gapMinutes > SESSION_GAP_RESET_MINUTES;
 
   if (domainChanged || sessionExpired) {
-    const updatedHistory = closeCurrentSession(currentSession, sessionHistory, now);
+    const updatedHistory = closeCurrentSession(
+      currentSession,
+      sessionHistory,
+      now
+    );
+
     return {
       sessionHistory: updatedHistory,
       currentSession: {
@@ -198,7 +195,7 @@ function computeSessionUpdate(domain, category, currentSession, sessionHistory) 
       ...currentSession,
       category,
       lastUpdatedAt: now,
-      sessionMinutes: currentSession.sessionMinutes + 1
+      sessionMinutes: (currentSession.sessionMinutes || 0) + 1
     }
   };
 }
@@ -219,23 +216,32 @@ async function incrementUsageMinute() {
   const domain = getDomain(activeTab.url);
   const category = await getDomainCategory(domain);
 
-  // Single read for all state we need.
-  const { dailyUsageMinutes, domainUsageMinutes, currentSession, sessionHistory } =
-    await getStoredUsage();
+  const {
+    dailyUsageMinutes,
+    domainUsageMinutes,
+    currentSession,
+    sessionHistory
+  } = await getStoredUsage();
 
   dailyUsageMinutes[todayKey] = (dailyUsageMinutes[todayKey] || 0) + 1;
 
   if (!domainUsageMinutes[todayKey]) {
     domainUsageMinutes[todayKey] = {};
   }
+
   domainUsageMinutes[todayKey][domain] =
     (domainUsageMinutes[todayKey][domain] || 0) + 1;
 
-  // Compute session update without touching storage.
-  const { currentSession: newSession, sessionHistory: newHistory } =
-    computeSessionUpdate(domain, category, currentSession, sessionHistory);
+  const {
+    currentSession: newSession,
+    sessionHistory: newHistory
+  } = computeSessionUpdate(
+    domain,
+    category,
+    currentSession,
+    sessionHistory
+  );
 
-  // Single atomic write for all state.
   await chrome.storage.local.set({
     dailyUsageMinutes,
     domainUsageMinutes,
@@ -251,6 +257,22 @@ async function incrementUsageMinute() {
   });
 }
 
+async function parseApiResponse(response) {
+  const text = await response.text();
+
+  if (!text) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {
+      raw_response: text
+    };
+  }
+}
+
 async function getDailyUsageHistory() {
   const { dailyUsageMinutes } = await getStoredUsage();
 
@@ -263,7 +285,6 @@ async function getDailyUsageHistory() {
 
     if (response.ok) {
       const backendHistory = await parseApiResponse(response);
-
       const dailyHistory = backendHistory.daily_usage_history || [];
 
       dailyHistory.forEach((item) => {
@@ -273,7 +294,10 @@ async function getDailyUsageHistory() {
       });
     }
   } catch (error) {
-    console.warn("Could not load backend usage history. Using local history only.", error);
+    console.warn(
+      "Could not load backend usage history. Using local history only.",
+      error
+    );
   }
 
   const dates = Object.keys(mergedUsage).sort();
@@ -302,6 +326,7 @@ async function isNotificationCooldownActive() {
   if (!lastNotificationAt) return false;
 
   const elapsedMinutes = (Date.now() - lastNotificationAt) / (1000 * 60);
+
   return elapsedMinutes < NOTIFICATION_COOLDOWN_MINUTES;
 }
 
@@ -310,7 +335,6 @@ async function isOverlayCooldownActive(domain) {
 
   const stored = await chrome.storage.local.get(["overlayCooldownByDomain"]);
   const overlayCooldownByDomain = stored.overlayCooldownByDomain || {};
-
   const lastOverlayShownAt = overlayCooldownByDomain[domain];
 
   if (!lastOverlayShownAt) return false;
@@ -398,6 +422,8 @@ function shouldTriggerOverlay(intervention, currentSession) {
 }
 
 async function sendOverlayToActiveTab(intervention, currentSession) {
+  if (!currentSession) return;
+
   const activeTab = await getActiveTab();
 
   if (!activeTab || !activeTab.id || !isTrackableUrl(activeTab.url)) {
@@ -410,7 +436,12 @@ async function sendOverlayToActiveTab(intervention, currentSession) {
     sessionMinutes: currentSession.sessionMinutes || 0,
     timerMinutes: intervention.recommended_timer_minutes,
     status: intervention.usage_status,
+
+    // Keep all three names so content.js can read it safely.
     frictionType: intervention.friction_type,
+    friction_type: intervention.friction_type,
+    frictionLevel: intervention.friction_type,
+
     message: intervention.message
   };
 
@@ -434,22 +465,6 @@ async function sendOverlayToActiveTab(intervention, currentSession) {
     });
   } catch (error) {
     console.error("HabitGuard overlay failed:", error);
-  }
-}
-
-async function parseApiResponse(response) {
-  const text = await response.text();
-
-  if (!text) {
-    return {};
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    return {
-      raw_response: text
-    };
   }
 }
 
@@ -515,7 +530,9 @@ async function sendUsageSnapshot(latestIntervention = null, options = {}) {
     };
 
     await chrome.storage.local.set({
-      lastUsageSnapshotAt: response.ok ? now : stored.lastUsageSnapshotAt || null,
+      lastUsageSnapshotAt: response.ok
+        ? now
+        : stored.lastUsageSnapshotAt || null,
       lastUsageSnapshotResult: result
     });
 
@@ -568,6 +585,7 @@ async function runJitaiCheck() {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
+        user_id: "local_user",
         usage_history_minutes: usageHistory,
         context: {
           current_domain: currentSession?.domain || null,
@@ -591,14 +609,27 @@ async function runJitaiCheck() {
     });
 
     await sendUsageSnapshot(intervention);
-
     await updateBadge(intervention);
 
-    if (intervention.should_notify) {
+    const shouldNotify =
+      intervention.should_notify === true ||
+      (
+        intervention.should_notify === undefined &&
+        shouldTriggerNotification(intervention)
+      );
+
+    if (shouldNotify) {
       await showInterventionNotification(intervention);
     }
 
-    if (intervention.should_overlay) {
+    const shouldOverlay =
+      intervention.should_overlay === true ||
+      (
+        intervention.should_overlay === undefined &&
+        shouldTriggerOverlay(intervention, currentSession)
+      );
+
+    if (shouldOverlay) {
       const overlayCooldownActive = await isOverlayCooldownActive(
         currentSession?.domain
       );
@@ -609,7 +640,6 @@ async function runJitaiCheck() {
     }
 
     debugLog("HabitGuard JITAI check:", intervention);
-
   } catch (error) {
     console.error("HabitGuard JITAI check failed:", error);
   } finally {
@@ -629,58 +659,12 @@ async function startAlarms() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  startAlarms();
-});
-
-chrome.runtime.onStartup.addListener(() => {
-  startAlarms();
-});
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === TRACKING_ALARM_NAME) {
-    incrementUsageMinute();
-  }
-
-  if (alarm.name === JITAI_ALARM_NAME) {
-    runJitaiCheck();
-  }
-});
-
-chrome.runtime.onMessage.addListener((message) => {
-  if (!message || !message.type) {
-    return;
-  }
-
-  if (message.type === "HABITGUARD_OVERLAY_DISMISSED") {
-    chrome.storage.local.set({
-      lastOverlayDismissedAt: Date.now(),
-      lastOverlayDismissedPayload: message.payload || null
-    });
-  }
-
-  if (message.type === "HABITGUARD_BREAK_ACCEPTED") {
-    const endAt = Date.now() + 5 * 60 * 1000;
-
-    chrome.storage.local.set({
-      lastBreakAcceptedAt: Date.now(),
-      lastBreakAcceptedPayload: message.payload || null,
-      activeInterventionTimer: {
-        type: "break",
-        durationMinutes: 5,
-        endAt
-      }
-    });
-  }
-});
-const HABITGUARD_API_BASE = "http://127.0.0.1:8000";
-
 async function sendFeedbackEvent(eventType, payload = {}) {
   const body = {
     user_id: payload.user_id || "local_user",
     event_type: eventType,
 
-    site: payload.site || null,
+    site: payload.site || payload.domain || null,
     category: payload.category || null,
     overlay_id: payload.overlay_id || null,
 
@@ -689,11 +673,18 @@ async function sendFeedbackEvent(eventType, payload = {}) {
 
     timestamp: new Date().toISOString(),
 
-    context: payload.context || {}
+    context: {
+      ...payload.context,
+      domain: payload.domain || null,
+      sessionMinutes: payload.sessionMinutes || null,
+      timerMinutes: payload.timerMinutes || null,
+      frictionType: payload.frictionType || payload.friction_type || null,
+      status: payload.status || null
+    }
   };
 
   try {
-    const response = await fetch(`${HABITGUARD_API_BASE}/feedback/event`, {
+    const response = await fetch(`${API_BASE_URL}/feedback/event`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -717,69 +708,109 @@ async function sendFeedbackEvent(eventType, payload = {}) {
   }
 }
 
+chrome.runtime.onInstalled.addListener(() => {
+  startAlarms();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  startAlarms();
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === TRACKING_ALARM_NAME) {
+    incrementUsageMinute();
+  }
+
+  if (alarm.name === JITAI_ALARM_NAME) {
+    runJitaiCheck();
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || message.type !== "HABITGUARD_FEEDBACK_EVENT") {
+  if (!message || !message.type) {
     return;
   }
 
-  const eventType = message.eventType;
-  const payload = message.payload || {};
-
-  if (eventType === "overlay_dismissed") {
+  // Legacy support: older content.js events.
+  if (message.type === "HABITGUARD_OVERLAY_DISMISSED") {
     chrome.storage.local.set({
       lastOverlayDismissedAt: Date.now(),
-      lastOverlayDismissedPayload: payload
+      lastOverlayDismissedPayload: message.payload || null
     });
+
+    return;
   }
 
-  if (eventType === "break_accepted") {
+  if (message.type === "HABITGUARD_BREAK_ACCEPTED") {
     const endAt = Date.now() + 5 * 60 * 1000;
 
     chrome.storage.local.set({
       lastBreakAcceptedAt: Date.now(),
-      lastBreakAcceptedPayload: payload,
+      lastBreakAcceptedPayload: message.payload || null,
       activeInterventionTimer: {
         type: "break",
         durationMinutes: 5,
         endAt
       }
     });
+
+    return;
   }
 
-  if (eventType === "break_completed" || eventType === "break_skipped") {
-    chrome.storage.local.set({
-      activeInterventionTimer: null,
-      lastBreakEndedAt: Date.now(),
-      lastBreakEndReason: eventType,
-      lastBreakEndPayload: payload
-    });
-  }
+  // Main feedback event path from content.js.
+  if (message.type === "HABITGUARD_FEEDBACK_EVENT") {
+    const eventType = message.eventType;
+    const payload = message.payload || {};
 
-  sendFeedbackEvent(eventType, payload)
-    .then(async (feedbackResult) => {
-      await sendUsageSnapshot(null, {
-        force: true,
-        source: `chrome_extension_feedback_${eventType}`
+    if (eventType === "overlay_dismissed") {
+      chrome.storage.local.set({
+        lastOverlayDismissedAt: Date.now(),
+        lastOverlayDismissedPayload: payload
       });
+    }
 
-      return feedbackResult;
-    })
-    .then(sendResponse);
+    if (eventType === "break_accepted") {
+      const endAt = Date.now() + 5 * 60 * 1000;
 
-  return true;
+      chrome.storage.local.set({
+        lastBreakAcceptedAt: Date.now(),
+        lastBreakAcceptedPayload: payload,
+        activeInterventionTimer: {
+          type: "break",
+          durationMinutes: 5,
+          endAt
+        }
+      });
+    }
+
+    if (eventType === "break_completed" || eventType === "break_skipped") {
+      chrome.storage.local.set({
+        activeInterventionTimer: null,
+        lastBreakEndedAt: Date.now(),
+        lastBreakEndReason: eventType,
+        lastBreakEndPayload: payload
+      });
+    }
+
+    sendFeedbackEvent(eventType, payload)
+      .then(async (feedbackResult) => {
+        await sendUsageSnapshot(null, {
+          force: true,
+          source: `chrome_extension_feedback_${eventType}`
+        });
+
+        return feedbackResult;
+      })
+      .then(sendResponse);
+
+    return true;
+  }
 });
 
 chrome.notifications.onClicked.addListener((notificationId) => {
   chrome.notifications.clear(notificationId);
 
   chrome.tabs.create({
-    url: chrome.runtime.getURL("popup.html"),
-  });
-});
-chrome.notifications.onClicked.addListener((notificationId) => {
-  chrome.notifications.clear(notificationId);
-
-  chrome.tabs.create({
-    url: chrome.runtime.getURL("popup.html"),
+    url: chrome.runtime.getURL("popup.html")
   });
 });

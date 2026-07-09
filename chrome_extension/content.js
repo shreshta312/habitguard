@@ -48,56 +48,71 @@ function startHabitGuardBreak(payload = {}, durationMinutes = 5) {
 
   const style = document.createElement("style");
   style.textContent = `
+    @keyframes habitguard-slide-in {
+      from { opacity: 0; transform: translateY(-40px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes habitguard-backdrop-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
     #habitguard-jitai-overlay {
       position: fixed;
       inset: 0;
       z-index: 2147483647;
-      background: rgba(15, 23, 42, 0.78);
+      background: rgba(52, 21, 15, 0.78);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-family: Arial, sans-serif;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      animation: habitguard-backdrop-in 0.3s ease;
     }
 
     #habitguard-jitai-overlay .habitguard-modal {
       width: min(420px, calc(100vw - 32px));
-      background: white;
-      color: #111827;
-      border-radius: 18px;
+      background: #F8ECDB;
+      color: #34150F;
+      border: 1.5px solid #D9B98C;
+      border-radius: 20px;
       padding: 24px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 20px 60px rgba(52, 21, 15, 0.4);
       text-align: center;
+      animation: habitguard-slide-in 0.4s ease;
     }
 
     #habitguard-jitai-overlay .habitguard-badge {
       display: inline-block;
-      background: #16a34a;
-      color: white;
-      padding: 5px 10px;
+      background: #34150F;
+      color: #F8ECDB;
+      padding: 5px 12px;
       border-radius: 999px;
       font-size: 12px;
       font-weight: bold;
       margin-bottom: 10px;
+      letter-spacing: 0.02em;
     }
 
     #habitguard-jitai-overlay h2 {
       margin: 0 0 10px;
       font-size: 24px;
-      color: #111827;
+      color: #34150F;
     }
 
     #habitguard-jitai-overlay .habitguard-main-message {
       font-size: 15px;
       line-height: 1.45;
-      color: #374151;
+      color: #7A4A28;
       margin: 0 0 18px;
     }
 
     #habitguard-jitai-overlay .habitguard-countdown {
       font-size: 44px;
       font-weight: bold;
-      color: #111827;
-      background: #f3f4f6;
+      color: #34150F;
+      background: #EACEAA;
+      border: 1px solid #D9B98C;
       border-radius: 16px;
       padding: 18px;
       margin: 14px 0;
@@ -112,19 +127,26 @@ function startHabitGuardBreak(payload = {}, durationMinutes = 5) {
 
     #habitguard-jitai-overlay button {
       border: none;
-      border-radius: 10px;
-      padding: 10px;
+      border-radius: 12px;
+      padding: 11px;
       font-weight: bold;
       cursor: pointer;
       font-size: 14px;
-      background: #e5e7eb;
-      color: #111827;
+      background: #EACEAA;
+      color: #34150F;
+      border: 1px solid #D9B98C;
+      transition: transform 0.15s ease, background 0.15s ease;
+    }
+
+    #habitguard-jitai-overlay button:hover {
+      background: #D9B98C;
+      transform: translateY(-1px);
     }
 
     #habitguard-jitai-overlay .habitguard-note {
-      margin: 12px 0 0;
+      margin: 14px 0 0;
       font-size: 12px;
-      color: #6b7280;
+      color: #B08A63;
       line-height: 1.4;
     }
   `;
@@ -179,6 +201,24 @@ function createHabitGuardOverlay(payload) {
   const overlay = document.createElement("div");
   overlay.id = HABITGUARD_OVERLAY_ID;
 
+  const frictionLevel = String(
+    payload.frictionLevel ||
+    payload.frictionType ||
+    payload.friction_type ||
+    ""
+  ).toUpperCase();
+
+  const isHard =
+    frictionLevel.includes("HARD") ||
+    frictionLevel.includes("STRONG");
+
+  const hardFrictionHTML = isHard ? `
+      <div class="habitguard-hard-friction">
+        <label class="habitguard-confirm-label">Type <strong>I want to continue</strong> to dismiss:</label>
+        <input type="text" id="habitguard-confirm-input" class="habitguard-confirm-input" placeholder="I want to continue" autocomplete="off" spellcheck="false" />
+      </div>
+  ` : "";
+
   overlay.innerHTML = `
     <div class="habitguard-modal">
       <div class="habitguard-badge">HabitGuard</div>
@@ -196,9 +236,11 @@ function createHabitGuardOverlay(payload) {
         <p><strong>Recommended timer:</strong> ${payload.timerMinutes || "Not active"} min</p>
       </div>
 
+      ${hardFrictionHTML}
+
       <div class="habitguard-actions">
         <button id="habitguard-start-break">Take 5-min Break</button>
-        <button id="habitguard-dismiss">Dismiss</button>
+        <button id="habitguard-dismiss"${isHard ? " disabled" : ""}>Dismiss</button>
       </div>
 
       <p class="habitguard-note">
@@ -209,61 +251,105 @@ function createHabitGuardOverlay(payload) {
 
   const style = document.createElement("style");
   style.textContent = `
+    @keyframes habitguard-slide-in {
+      from { opacity: 0; transform: translateY(-40px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes habitguard-backdrop-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
     #habitguard-jitai-overlay {
       position: fixed;
       inset: 0;
       z-index: 2147483647;
-      background: rgba(15, 23, 42, 0.72);
+      background: rgba(52, 21, 15, 0.78);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-family: Arial, sans-serif;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      animation: habitguard-backdrop-in 0.3s ease;
     }
 
     #habitguard-jitai-overlay .habitguard-modal {
       width: min(420px, calc(100vw - 32px));
-      background: white;
-      color: #111827;
-      border-radius: 18px;
+      background: #F8ECDB;
+      color: #34150F;
+      border: 1.5px solid #D9B98C;
+      border-radius: 20px;
       padding: 22px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 20px 60px rgba(52, 21, 15, 0.4);
       text-align: left;
+      animation: habitguard-slide-in 0.4s ease;
     }
 
     #habitguard-jitai-overlay .habitguard-badge {
       display: inline-block;
-      background: #2563eb;
-      color: white;
-      padding: 5px 10px;
+      background: #34150F;
+      color: #F8ECDB;
+      padding: 5px 12px;
       border-radius: 999px;
       font-size: 12px;
       font-weight: bold;
       margin-bottom: 10px;
+      letter-spacing: 0.02em;
     }
 
     #habitguard-jitai-overlay h2 {
       margin: 0 0 10px;
       font-size: 24px;
-      color: #111827;
+      color: #34150F;
     }
 
     #habitguard-jitai-overlay .habitguard-main-message {
       font-size: 15px;
       line-height: 1.45;
-      color: #374151;
+      color: #7A4A28;
       margin: 0 0 14px;
     }
 
     #habitguard-jitai-overlay .habitguard-details {
-      background: #f3f4f6;
-      border-radius: 12px;
-      padding: 10px 12px;
+      background: #EACEAA;
+      border: 1px solid #D9B98C;
+      border-radius: 14px;
+      padding: 10px 14px;
       margin-bottom: 14px;
       font-size: 14px;
+      color: #34150F;
     }
 
     #habitguard-jitai-overlay .habitguard-details p {
       margin: 5px 0;
+    }
+
+    #habitguard-jitai-overlay .habitguard-hard-friction {
+      margin-bottom: 14px;
+    }
+
+    #habitguard-jitai-overlay .habitguard-confirm-label {
+      display: block;
+      font-size: 13px;
+      color: #7A4A28;
+      margin-bottom: 6px;
+    }
+
+    #habitguard-jitai-overlay .habitguard-confirm-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border: 1.5px solid #D9B98C;
+      border-radius: 10px;
+      font-size: 14px;
+      background: #EACEAA;
+      color: #34150F;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+
+    #habitguard-jitai-overlay .habitguard-confirm-input:focus {
+      border-color: #7A4A28;
     }
 
     #habitguard-jitai-overlay .habitguard-actions {
@@ -274,33 +360,62 @@ function createHabitGuardOverlay(payload) {
 
     #habitguard-jitai-overlay button {
       border: none;
-      border-radius: 10px;
-      padding: 10px;
+      border-radius: 12px;
+      padding: 11px;
       font-weight: bold;
       cursor: pointer;
       font-size: 14px;
+      transition: transform 0.15s ease, background 0.15s ease, opacity 0.15s ease;
     }
 
     #habitguard-start-break {
-      background: #2563eb;
-      color: white;
+      background: #34150F;
+      color: #F8ECDB;
+    }
+
+    #habitguard-start-break:hover {
+      background: #4e2219;
+      transform: translateY(-1px);
     }
 
     #habitguard-dismiss {
-      background: #e5e7eb;
-      color: #111827;
+      background: #EACEAA;
+      color: #34150F;
+      border: 1px solid #D9B98C;
+    }
+
+    #habitguard-dismiss:hover:not(:disabled) {
+      background: #D9B98C;
+      transform: translateY(-1px);
+    }
+
+    #habitguard-dismiss:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
     }
 
     #habitguard-jitai-overlay .habitguard-note {
-      margin: 12px 0 0;
+      margin: 14px 0 0;
       font-size: 12px;
-      color: #6b7280;
+      color: #B08A63;
       line-height: 1.4;
     }
   `;
 
   overlay.appendChild(style);
   document.body.appendChild(overlay);
+
+  // HARD friction: enable dismiss button only when user types the confirmation phrase
+  if (isHard) {
+    const confirmInput = overlay.querySelector("#habitguard-confirm-input");
+    const dismissBtn   = overlay.querySelector("#habitguard-dismiss");
+    if (confirmInput && dismissBtn) {
+      confirmInput.addEventListener("input", () => {
+        const match = confirmInput.value.trim().toLowerCase() === "i want to continue";
+        dismissBtn.disabled = !match;
+      });
+    }
+  }
 
   overlay
     .querySelector("#habitguard-dismiss")

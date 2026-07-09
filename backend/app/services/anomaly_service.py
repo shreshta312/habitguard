@@ -1,10 +1,22 @@
 import pickle
-import pandas as pd
 from pathlib import Path
 
+import pandas as pd
 
-MODEL_PATH = Path("../ml/saved_models/anomaly_detector.pkl")
-SCALER_PATH = Path("../ml/saved_models/anomaly_scaler.pkl")
+
+MODEL_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "ml"
+    / "saved_models"
+    / "anomaly_detector.pkl"
+)
+
+SCALER_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "ml"
+    / "saved_models"
+    / "anomaly_scaler.pkl"
+)
 
 
 class AnomalyService:
@@ -27,11 +39,10 @@ class AnomalyService:
             "screen_time_min": screen_time_min,
             "launches": launches,
             "interactions": interactions,
-            "is_productive": is_productive
+            "is_productive": is_productive,
         }])
 
         sample_scaled = self.scaler.transform(sample)
-
         prediction = self.model.predict(sample_scaled)[0]
 
         if prediction == -1:
@@ -43,15 +54,18 @@ class AnomalyService:
 
         return {
             "model_role": "supporting_dashboard_analytics",
-          "used_in_live_intervention_loop": False,
-          "analytics_purpose": (
-         "Detects unusual usage patterns for dashboard alerts. "
-         "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
-         ),
-         "screen_time_min": screen_time_min,
-          "launches": launches,
-         "interactions": interactions,
-          "is_productive": is_productive,
-          "result": result,
-         "message": message
+            "used_in_live_intervention_loop": False,
+            "analytics_purpose": (
+                "Detects unusual usage patterns for dashboard alerts. "
+                "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
+            ),
+            "screen_time_min": screen_time_min,
+            "launches": launches,
+            "interactions": interactions,
+            "is_productive": is_productive,
+            "result": result,
+            "message": message,
         }
+
+
+anomaly_service = AnomalyService()

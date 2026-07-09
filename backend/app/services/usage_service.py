@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.schemas.usage_schema import UsageSnapshot
+from app.services.database import db_manager
 
 
 class UsageService:
@@ -12,13 +13,11 @@ class UsageService:
     Stores Chrome extension usage snapshots for dashboard/history use.
 
     Chrome storage remains the short-term live tracker.
-    This service stores longer-term backend snapshots in JSONL format.
+    This service stores longer-term backend snapshots in SQLite.
     """
 
     def __init__(self):
-        self.data_dir = Path(__file__).resolve().parents[2] / "data"
-        self.usage_file = self.data_dir / "usage_snapshots.jsonl"
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        pass
 
     def save_snapshot(self, snapshot: UsageSnapshot):
         snapshot_id = str(uuid.uuid4())
@@ -36,8 +35,16 @@ class UsageService:
         if not payload.get("date"):
             payload["date"] = datetime.now(timezone.utc).date().isoformat()
 
-        with open(self.usage_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, default=str) + "\n")
+        user_id = payload.get("user_id", "local_user")
+        date_key = payload.get("date")
+
+        db_manager.save_snapshot(
+            snapshot_id=snapshot_id,
+            user_id=user_id,
+            date=date_key,
+            server_received_at=now,
+            payload=payload
+        )
 
         return {
             "success": True,
@@ -46,30 +53,7 @@ class UsageService:
         }
 
     def load_snapshots(self, user_id=None):
-        if not self.usage_file.exists():
-            return []
-
-        snapshots = []
-
-        with open(self.usage_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-
-                if not line:
-                    continue
-
-                try:
-                    snapshot = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                if user_id is not None:
-                    if str(snapshot.get("user_id", "local_user")) != str(user_id):
-                        continue
-
-                snapshots.append(snapshot)
-
-        return snapshots
+        return db_manager.load_snapshots(user_id=user_id)
 
     def get_history(self, user_id="local_user", limit=30):
         snapshots = self.load_snapshots(user_id=user_id)
@@ -286,6 +270,54 @@ class UsageService:
             0,
         )
 
+        # Categorize domains to determine productivity flag
+        PRODUCTIVE_DOMAINS = {
+            "leetcode.com", "github.com", "stackoverflow.com", "developer.mozilla.org",
+            "docs.python.org", "kaggle.com", "coursera.org", "edx.org", "geeksforgeeks.org",
+            "w3schools.com", "localhost", "127.0.0.1"
+        }
+        TEMPTATION_DOMAINS = {
+            "youtube.com", "instagram.com", "facebook.com", "x.com", "twitter.com",
+            "reddit.com", "netflix.com", "primevideo.com", "hotstar.com", "discord.com"
+        }
+
+        productive_mins = sum(mins for domain, mins in latest_day_domains.items() if any(p in domain.lower() for p in PRODUCTIVE_DOMAINS))
+        temptation_mins = sum(mins for domain, mins in latest_day_domains.items() if any(t in domain.lower() for t in TEMPTATION_DOMAINS))
+        is_productive_today = 1 if productive_mins >= temptation_mins else 0
+
+        estimated_launches = max(1, total_sessions)
+        estimated_interactions = max(5, int(today_total * 15))
+
+        # Run anomaly service
+        try:
+            from app.services.anomaly_service import anomaly_service
+            anomaly_result = anomaly_service.detect_anomaly(
+                screen_time_min=round(today_total, 2),
+                launches=estimated_launches,
+                interactions=estimated_interactions,
+                is_productive=is_productive_today
+            )
+            anomaly_result["disclosures"] = {
+                "launches_source": "estimated_from_sessions_count",
+                "interactions_source": "estimated_from_screen_time_multiplier_15",
+                "note": "Launches and interactions are approximated for anomaly classification because the privacy-first Chrome extension does not track clicks/keypresses."
+            }
+        except Exception as e:
+            anomaly_result = {"success": False, "error": f"Failed to run anomaly detector: {str(e)}"}
+
+        # Run forecaster service
+        try:
+            from app.services.forecaster_service import forecaster_service
+            daily_history_list = [daily_usage_by_date[d] for d in sorted(daily_usage_by_date.keys())]
+            forecast_result = forecaster_service.predict_next_usage(
+                daily_history_minutes=daily_history_list,
+                today_launches=estimated_launches,
+                today_interactions=estimated_interactions,
+                today_is_productive=is_productive_today
+            )
+        except Exception as e:
+            forecast_result = {"success": False, "error": f"Failed to run usage forecaster: {str(e)}"}
+
         return {
             "user_id": user_id,
             "dashboard_ready": True,
@@ -338,6 +370,9 @@ class UsageService:
                 "timer_cleared_count": timer_cleared_count,
                 "category_updated_count": category_updated_count,
             },
+
+            "anomaly": anomaly_result,
+            "forecast": forecast_result,
         }
 
 
