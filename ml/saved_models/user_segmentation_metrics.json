@@ -1,0 +1,97 @@
+{
+  "model_type": "KMeans Pipeline",
+  "number_of_clusters": 5,
+  "training_rows": 7500,
+  "silhouette_score": 0.0875,
+  "cluster_names": {
+    "1": "Heavy Social User",
+    "3": "Gaming Heavy User",
+    "2": "Productivity Focused User",
+    "4": "Late Night / High Usage User",
+    "0": "Balanced User"
+  },
+  "cluster_counts": {
+    "0": 1248,
+    "1": 1531,
+    "2": 2040,
+    "3": 1443,
+    "4": 1238
+  },
+  "cluster_centers_raw": {
+    "0": {
+      "age": 26.4423,
+      "daily_screen_time_hours": 5.2714,
+      "social_media_hours": 3.1651,
+      "gaming_hours": 2.0392,
+      "work_study_hours": 3.2163,
+      "sleep_hours": 6.6546,
+      "notifications_per_day": 135.5577,
+      "app_opens_per_day": 97.4415,
+      "weekend_screen_time": 6.9239,
+      "stress_level": 1.0032,
+      "academic_work_impact": 0.4984,
+      "gender_male": 0.0,
+      "gender_other": 1.0
+    },
+    "1": {
+      "age": 26.3991,
+      "daily_screen_time_hours": 9.3757,
+      "social_media_hours": 3.3323,
+      "gaming_hours": 2.0024,
+      "work_study_hours": 3.1992,
+      "sleep_hours": 6.8378,
+      "notifications_per_day": 134.1234,
+      "app_opens_per_day": 98.8184,
+      "weekend_screen_time": 11.1782,
+      "stress_level": 1.0059,
+      "academic_work_impact": 0.4853,
+      "gender_male": 1.0,
+      "gender_other": -0.0
+    },
+    "2": {
+      "age": 26.5167,
+      "daily_screen_time_hours": 4.8188,
+      "social_media_hours": 3.2526,
+      "gaming_hours": 2.0122,
+      "work_study_hours": 3.23,
+      "sleep_hours": 6.7286,
+      "notifications_per_day": 133.7608,
+      "app_opens_per_day": 95.402,
+      "weekend_screen_time": 6.4929,
+      "stress_level": 0.9701,
+      "academic_work_impact": 0.5098,
+      "gender_male": 0.501,
+      "gender_other": -0.0
+    },
+    "3": {
+      "age": 26.6424,
+      "daily_screen_time_hours": 9.3149,
+      "social_media_hours": 3.2685,
+      "gaming_hours": 2.0356,
+      "work_study_hours": 3.2918,
+      "sleep_hours": 6.7556,
+      "notifications_per_day": 135.6784,
+      "app_opens_per_day": 100.4844,
+      "weekend_screen_time": 11.111,
+      "stress_level": 1.018,
+      "academic_work_impact": 0.4969,
+      "gender_male": 0.0,
+      "gender_other": -0.0
+    },
+    "4": {
+      "age": 26.9063,
+      "daily_screen_time_hours": 9.7291,
+      "social_media_hours": 3.3503,
+      "gaming_hours": 1.9818,
+      "work_study_hours": 3.2852,
+      "sleep_hours": 6.6911,
+      "notifications_per_day": 132.2738,
+      "app_opens_per_day": 97.9208,
+      "weekend_screen_time": 11.547,
+      "stress_level": 1.0638,
+      "academic_work_impact": 0.5048,
+      "gender_male": 0.0,
+      "gender_other": 1.0
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import pickle
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -13,57 +14,130 @@ MODEL_PATH = (
 
 
 class SegmentService:
-    def __init__(self):
-        try:
-            with open(MODEL_PATH, "rb") as file:
-                self.model = pickle.load(file)
+    def __init__(self) -> None:
+        self.pipeline: Any | None = None
+        self.feature_columns: list[str] = []
+        self.cluster_names: dict[int, str] = {}
+        self.load_error: str | None = None
 
-        except FileNotFoundError as e:
-            raise RuntimeError(
-                f"SegmentService failed to load model file: {e}. "
-                f"Expected at {MODEL_PATH}."
+        try:
+            if not MODEL_PATH.exists():
+                self.load_error = (
+                    "Segmentation model was not found at "
+                    f"{MODEL_PATH}."
+                )
+                return
+
+            with open(MODEL_PATH, "rb") as file:
+                artifact = pickle.load(file)
+
+            if not isinstance(artifact, dict):
+                self.load_error = (
+                    "Legacy segmentation model detected. "
+                    "Retrain the segmentation model to create "
+                    "the complete preprocessing pipeline."
+                )
+                return
+
+            self.pipeline = artifact.get("pipeline")
+
+            self.feature_columns = list(
+                artifact.get(
+                    "feature_columns",
+                    [],
+                )
             )
 
-    def get_segment_name(self, features):
-        if (
-            features["daily_screen_time_hours"] > 0.8
-            and features["social_media_hours"] > 0.8
-        ):
-            return "Heavy Social User"
+            self.cluster_names = {
+                int(key): value
+                for key, value
+                in artifact.get(
+                    "cluster_names",
+                    {},
+                ).items()
+            }
 
-        if features["gaming_hours"] > 0.8:
-            return "Gaming Heavy User"
+            if self.pipeline is None:
+                self.load_error = (
+                    "The segmentation artifact does not "
+                    "contain a prediction pipeline."
+                )
 
-        if (
-            features["work_study_hours"] > 0.8
-            and features["daily_screen_time_hours"] < 0.5
-        ):
-            return "Productivity Focused User"
+        except Exception as error:
+            self.pipeline = None
+            self.load_error = str(error)
 
-        if (
-            features["sleep_hours"] < -0.8
-            and features["daily_screen_time_hours"] > 0.5
-        ):
-            return "Late Night / High Usage User"
+    def predict_segment(
+        self,
+        features: dict,
+    ) -> dict:
+        if self.pipeline is None:
+            return {
+                "success": False,
+                "model_loaded": False,
+                "cluster": None,
+                "segment_name": "UNAVAILABLE",
+                "error": (
+                    self.load_error
+                    or "Segmentation model unavailable."
+                ),
+                "model_role": (
+                    "supporting_dashboard_analytics"
+                ),
+                "used_in_live_intervention_loop": False,
+            }
 
-        return "Balanced User"
+        try:
+            sample_data = {
+                column: features.get(column, 0)
+                for column in self.feature_columns
+            }
 
-    def predict_segment(self, features):
-        sample = pd.DataFrame([features])
+            sample = pd.DataFrame(
+                [sample_data],
+                columns=self.feature_columns,
+            )
 
-        cluster = self.model.predict(sample)[0]
-        segment_name = self.get_segment_name(features)
+            cluster = int(
+                self.pipeline.predict(sample)[0]
+            )
 
-        return {
-            "model_role": "supporting_dashboard_analytics",
-            "used_in_live_intervention_loop": False,
-            "analytics_purpose": (
-                "Groups users into behavior segments for dashboard personalization. "
-                "Live interventions are handled by StructuralTimerEngine and DecisionEngine."
-            ),
-            "cluster": int(cluster),
-            "segment_name": segment_name,
-        }
+            segment_name = self.cluster_names.get(
+                cluster,
+                f"Behavior Cluster {cluster}",
+            )
+
+            return {
+                "success": True,
+                "model_loaded": True,
+                "model_role": (
+                    "supporting_dashboard_analytics"
+                ),
+                "used_in_live_intervention_loop": False,
+                "analytics_purpose": (
+                    "Provides an experimental behavioural "
+                    "grouping for dashboard awareness. "
+                    "It does not control live interventions."
+                ),
+                "cluster": cluster,
+                "segment_name": segment_name,
+            }
+
+        except Exception as error:
+            return {
+                "success": False,
+                "model_loaded": True,
+                "cluster": None,
+                "segment_name": "UNAVAILABLE",
+                "error": (
+                    "Segment prediction failed: "
+                    f"{error}"
+                ),
+                "model_role": (
+                    "supporting_dashboard_analytics"
+                ),
+                "used_in_live_intervention_loop": False,
+            }
 
 
 segment_service = SegmentService()
