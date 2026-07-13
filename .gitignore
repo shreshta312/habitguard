@@ -25,3 +25,16 @@ Thumbs.db
 # HabitGuard runtime data
 backend/data/usage_snapshots.jsonl
 backend/data/feedback_events.jsonl
+
+# Runtime database and backups
+*.db
+*.db-journal
+*.bak
+backend/data/*.jsonl.bak
+
+# Generated datasets/runtime data
+data/
+
+# Frontend generated files
+node_modules/
+dist/
