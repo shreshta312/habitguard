@@ -13,7 +13,7 @@ from app.api.feedback import router as feedback_router
 from app.services.feedback_service import feedback_service
 from app.api.usage import router as usage_router
 from app.services.diagnostics_service import get_diagnostics
-
+from pathlib import Path
 
 app = FastAPI(
     title="HabitGuard API",
@@ -32,7 +32,8 @@ app.add_middleware(
 app.include_router(feedback_router)
 app.include_router(usage_router)
 
-CSV_PATH = "../data/processed/cleaned_screen_time.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CSV_PATH = PROJECT_ROOT / "data" / "processed" / "cleaned_screen_time.csv"
 
 habitguard_service = HabitGuardService(CSV_PATH)
 dataset_service = DatasetService(CSV_PATH)
