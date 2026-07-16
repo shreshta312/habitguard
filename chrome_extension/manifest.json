@@ -12,10 +12,11 @@
     "windows"
   ],
   
-  "host_permissions": [
-    "http://127.0.0.1:8000/*",
-    "http://localhost:8000/*"
-  ],
+ "host_permissions": [
+  "http://127.0.0.1:8000/*",
+  "http://localhost:8000/*",
+  "https://habitguard-production.up.railway.app/*"
+],
   "icons": {
     "16": "icon128.png",
     "48": "icon128.png",
