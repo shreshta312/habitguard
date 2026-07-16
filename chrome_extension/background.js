@@ -9,8 +9,8 @@ const TRACKING_ALARM_NAME = "habitguard_usage_tracker";
 const JITAI_ALARM_NAME = "habitguard_jitai_checker";
 
 const JITAI_CHECK_INTERVAL_MINUTES = 5;
-const NOTIFICATION_COOLDOWN_MINUTES = 15;
-const OVERLAY_COOLDOWN_MINUTES = 20;
+const DEFAULT_NOTIFICATION_COOLDOWN_MINUTES = 15;
+const DEFAULT_OVERLAY_COOLDOWN_MINUTES = 20;
 const SESSION_GAP_RESET_MINUTES = 3;
 const MAX_SESSION_HISTORY = 50;
 
@@ -319,18 +319,32 @@ function shouldTriggerNotification(intervention) {
   );
 }
 
-async function isNotificationCooldownActive() {
+function getInterventionCooldownMinutes(intervention, fallbackMinutes) {
+  const value = Number(intervention?.cooldown_minutes);
+
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallbackMinutes;
+  }
+
+  return Math.min(120, Math.max(5, value));
+}
+
+async function isNotificationCooldownActive(intervention) {
   const stored = await chrome.storage.local.get(["lastNotificationAt"]);
   const lastNotificationAt = stored.lastNotificationAt;
 
   if (!lastNotificationAt) return false;
 
   const elapsedMinutes = (Date.now() - lastNotificationAt) / (1000 * 60);
+  const cooldownMinutes = getInterventionCooldownMinutes(
+    intervention,
+    DEFAULT_NOTIFICATION_COOLDOWN_MINUTES
+  );
 
-  return elapsedMinutes < NOTIFICATION_COOLDOWN_MINUTES;
+  return elapsedMinutes < cooldownMinutes;
 }
 
-async function isOverlayCooldownActive(domain) {
+async function isOverlayCooldownActive(domain, intervention) {
   if (!domain) return false;
 
   const stored = await chrome.storage.local.get(["overlayCooldownByDomain"]);
@@ -340,12 +354,16 @@ async function isOverlayCooldownActive(domain) {
   if (!lastOverlayShownAt) return false;
 
   const elapsedMinutes = (Date.now() - lastOverlayShownAt) / (1000 * 60);
+  const cooldownMinutes = getInterventionCooldownMinutes(
+    intervention,
+    DEFAULT_OVERLAY_COOLDOWN_MINUTES
+  );
 
-  return elapsedMinutes < OVERLAY_COOLDOWN_MINUTES;
+  return elapsedMinutes < cooldownMinutes;
 }
 
 async function showInterventionNotification(intervention) {
-  const cooldownActive = await isNotificationCooldownActive();
+  const cooldownActive = await isNotificationCooldownActive(intervention);
   if (cooldownActive) return;
 
   const timer = intervention.recommended_timer_minutes;
@@ -631,7 +649,8 @@ async function runJitaiCheck() {
 
     if (shouldOverlay) {
       const overlayCooldownActive = await isOverlayCooldownActive(
-        currentSession?.domain
+        currentSession?.domain,
+        intervention
       );
 
       if (!overlayCooldownActive) {
