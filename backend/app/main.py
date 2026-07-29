@@ -805,44 +805,31 @@ def get_user_current_runtime_state(user_id: str):
                 "remaining_minutes": round(max(0.0, eff_planned - ep_focused_mins), 2) if eff_planned is not None else None
             }
 
-        # Defect 4: query optimization directly by current session_id and episode_id;
-        # do not fetch globally latest and discard on mismatch.
+        # Defect 4 (tightened): query optimization_runs by exact current session_id only.
+        # Never use an episode-level OR subquery that could pull in runs from other sessions.
+        # session_id, episode_id, and domain must all match exactly.
         latest_intervention = None
-        if current_session and (current_sid or current_epid):
-            # Build identity-matched query
-            params = []
-            clauses = []
-            if current_sid:
-                clauses.append("o.session_id = ?")
-                params.append(current_sid)
-            if current_epid:
-                # Also accept runs from previous technical sessions that share this episode
-                clauses.append(
-                    "(o.session_id IN (SELECT session_id FROM technical_sessions WHERE episode_id = ?))"
-                )
-                params.append(current_epid)
-
-            id_filter = " OR ".join(clauses)
+        if current_session and current_sid:
             cur.execute(
-                f"""SELECT o.session_id, o.user_id, o.optimized_target, o.recommended_remaining,
+                """SELECT o.session_id, o.user_id, o.optimized_target, o.recommended_remaining,
                           o.solver_status, o.created_at_utc,
                           t.episode_id AS opt_episode_id, t.domain AS opt_domain
                    FROM optimization_runs o
                    JOIN technical_sessions t ON o.session_id = t.session_id
-                   WHERE o.user_id = ? AND ({id_filter})
+                   WHERE o.user_id = ? AND o.session_id = ?
                    ORDER BY o.rowid DESC LIMIT 1""",
-                [user_id] + params
+                (user_id, current_sid)
             )
             opt_row = cur.fetchone()
             if opt_row:
                 opt_dict = dict(opt_row)
-                # Verify identity: session, episode, and domain must all match
                 opt_epid = opt_dict.get("opt_episode_id")
                 opt_domain = opt_dict.get("opt_domain")
+                # Strict identity: all three dimensions must match
                 matches_session = (opt_dict.get("session_id") == current_sid)
-                matches_episode = (opt_epid and current_epid and opt_epid == current_epid)
+                matches_episode = (opt_epid is None or current_epid is None or opt_epid == current_epid)
                 matches_domain = (opt_domain == current_domain)
-                if (matches_session or matches_episode) and matches_domain:
+                if matches_session and matches_episode and matches_domain:
                     latest_intervention = opt_dict
 
         if current_session is None:

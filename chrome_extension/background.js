@@ -435,8 +435,19 @@ async function incrementUsageMinute() {
     };
     const sent = await sendActivityBatch(updatedSession.session_id, [activity]);
     if (!sent) {
-      await enqueueOfflineActivity(updatedSession.session_id, activity);
+      await enqueueOfflineActivity(updatedSession.session_id, activity, domain, "local_user");
     }
+  } else {
+    // No canonical session_id yet (offline fallback): enqueue with null session_id
+    // and domain so that flushOfflineQueue can reconcile after reconnect.
+    const clientEventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const activity = {
+      event_type: "focus_heartbeat",
+      focused_duration_ms: 60000,
+      client_event_id: clientEventId,
+      event_timestamp_utc: new Date().toISOString()
+    };
+    await enqueueOfflineActivity(null, activity, domain, "local_user");
   }
 }
 
@@ -525,17 +536,26 @@ async function sendActivityBatch(sessionId, activities) {
 
 /**
  * Add an activity event to persistent offline queue in chrome.storage.local.
+ * Preserves original client_event_id, event_timestamp_utc, focused_duration_ms,
+ * domain, and user_id. session_id may be null for events recorded during a
+ * long-gap offline period whose canonical session has expired.
  */
-async function enqueueOfflineActivity(sessionId, activity) {
+async function enqueueOfflineActivity(sessionId, activity, domainOverride, userIdOverride) {
   const { offlineQueue, offlineQueueDiagnostics } = await getStoredUsage();
   const newDiagnostics = { ...offlineQueueDiagnostics };
 
   const item = {
-    session_id: sessionId,
+    // Identity — may be null when recorded after a long-gap expiry.
+    session_id: sessionId || null,
+    provisional_session_id: sessionId || null,   // preserved for audit
+    // Payload — never rewritten after enqueueing.
     client_event_id: activity.client_event_id,
     event_timestamp_utc: activity.event_timestamp_utc || new Date().toISOString(),
     event_type: activity.event_type || "focus_heartbeat",
     focused_duration_ms: activity.focused_duration_ms || 60000,
+    // Routing context — needed to obtain a fresh session on reconciliation.
+    domain: domainOverride || activity.domain || null,
+    user_id: userIdOverride || "local_user",
     retry_count: 0,
     enqueue_timestamp: new Date().toISOString()
   };
@@ -558,42 +578,135 @@ async function enqueueOfflineActivity(sessionId, activity) {
 }
 
 /**
- * Flush persistent offline queue by grouping by session_id and resending batches.
+ * Flush persistent offline queue.
+ *
+ * Algorithm:
+ * A. Events with a canonical session_id are sent directly to that session.
+ *    They are removed from the queue only after a successful canonical response.
+ *    On failure they are retained with incremented retry_count.
+ *
+ * B. Events with session_id = null (recorded after a long-gap expiry) are
+ *    never discarded. Instead, after all canonical flushes complete, we attempt
+ *    to reconcile a fresh canonical session for each unique domain present in
+ *    the null-session group. If reconciliation succeeds we bind those events
+ *    to the fresh session_id and submit them. They are removed only on a
+ *    successful submission. If reconciliation or submission fails the events
+ *    remain in the queue untouched for the next retry cycle.
+ *
+ * Invariants enforced:
+ *  - Original client_event_id and event_timestamp_utc are never rewritten.
+ *  - Events are submitted to the session obtained AFTER reconnect, never to
+ *    the expired session that was active when they were recorded.
+ *  - Duplicate submission is prevented by the backend ON CONFLICT(client_event_id) DO NOTHING.
  */
 async function flushOfflineQueue() {
   const { offlineQueue, offlineQueueDiagnostics } = await getStoredUsage();
   if (!offlineQueue || offlineQueue.length === 0) return;
 
   const newDiagnostics = { ...offlineQueueDiagnostics };
+
+  // Partition into canonical (has session_id) and provisional (null session_id) groups.
   const bySession = {};
+  const provisionalByDomain = {};
 
   for (const entry of offlineQueue) {
     const sid = entry.session_id;
-    // Defect 6: skip events recorded under an expired offline fallback (no canonical id)
-    if (!sid) {
-      newDiagnostics.totalDropped = (newDiagnostics.totalDropped || 0) + 1;
-      continue;
+    if (sid) {
+      // Group A: known canonical session.
+      if (!bySession[sid]) bySession[sid] = [];
+      bySession[sid].push(entry);
+    } else {
+      // Group B: provisional — no canonical session yet.
+      // Retain all fields; group by domain for reconciliation.
+      const domain = entry.domain || "__unknown__";
+      if (!provisionalByDomain[domain]) provisionalByDomain[domain] = [];
+      provisionalByDomain[domain].push(entry);
     }
-    if (!bySession[sid]) bySession[sid] = [];
-    bySession[sid].push(entry);
   }
 
   const failedQueue = [];
 
+  // --- Group A: flush canonical-session events ---
   for (const [sessionId, entries] of Object.entries(bySession)) {
     const activities = entries.map((e) => ({
       event_type: e.event_type,
       focused_duration_ms: e.focused_duration_ms,
       client_event_id: e.client_event_id,
-      event_timestamp_utc: e.event_timestamp_utc
+      event_timestamp_utc: e.event_timestamp_utc   // never rewritten
     }));
 
     const ok = await sendActivityBatch(sessionId, activities);
     if (ok) {
       newDiagnostics.totalFlushed = (newDiagnostics.totalFlushed || 0) + entries.length;
     } else {
-      // Retain failed items and increment retry count
+      // Retain failed items and increment retry count.
       entries.forEach((e) => { e.retry_count = (e.retry_count || 0) + 1; });
+      failedQueue.push(...entries);
+    }
+  }
+
+  // --- Group B: reconcile provisional events with a fresh session ---
+  for (const [domain, entries] of Object.entries(provisionalByDomain)) {
+    if (domain === "__unknown__" || !domain) {
+      // Cannot reconcile without a domain — retain for next cycle.
+      entries.forEach((e) => { e.retry_count = (e.retry_count || 0) + 1; });
+      failedQueue.push(...entries);
+      continue;
+    }
+
+    let freshSessionId = null;
+    try {
+      // Obtain a fresh canonical session for this domain after reconnect.
+      const userId = entries[0]?.user_id || "local_user";
+      const apiBase = await getApiBaseUrl();
+      const browserTimezone = (typeof Intl !== "undefined" && Intl.DateTimeFormat)
+        ? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC")
+        : "UTC";
+      const sessionRes = await fetch(`${apiBase}/sessions/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: userId,
+          domain: domain,
+          purpose: "unknown",
+          intended_minutes: null,
+          timer_mode: "no_timer",
+          remember_today: true,
+          local_timezone: browserTimezone
+        })
+      });
+      if (sessionRes.ok) {
+        const sessionData = await parseApiResponse(sessionRes);
+        freshSessionId = sessionData.session_id || null;
+      }
+    } catch (err) {
+      console.warn("[HabitGuard] offline reconcile: session start failed for domain", domain, err);
+    }
+
+    if (!freshSessionId) {
+      // Reconciliation failed — retain all events for next retry cycle.
+      entries.forEach((e) => { e.retry_count = (e.retry_count || 0) + 1; });
+      failedQueue.push(...entries);
+      continue;
+    }
+
+    // Bind events to the fresh session and submit (original timestamps preserved).
+    const activities = entries.map((e) => ({
+      event_type: e.event_type,
+      focused_duration_ms: e.focused_duration_ms,
+      client_event_id: e.client_event_id,
+      event_timestamp_utc: e.event_timestamp_utc   // never rewritten
+    }));
+
+    const ok = await sendActivityBatch(freshSessionId, activities);
+    if (ok) {
+      newDiagnostics.totalFlushed = (newDiagnostics.totalFlushed || 0) + entries.length;
+    } else {
+      // Submission failed — update session_id to fresh one and retain.
+      entries.forEach((e) => {
+        e.session_id = freshSessionId;  // bind to fresh session for next retry
+        e.retry_count = (e.retry_count || 0) + 1;
+      });
       failedQueue.push(...entries);
     }
   }

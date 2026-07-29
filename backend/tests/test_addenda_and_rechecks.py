@@ -462,6 +462,14 @@ def test_current_endpoint_matching_session_returns_intervention():
     assert current["latest_intervention"]["session_id"] == sid
 
 def test_current_endpoint_resumed_episode_different_session_returns_intervention():
+    """
+    After a short-gap resumption, sid2 shares episode with sid1 but has no own
+    optimization run. Per strict session_id identity, /current must return
+    latest_intervention=null for sid2 (only sid2's own runs are returned).
+
+    This is the correct behavior per the Item-5 tightening requirement:
+    do NOT use 'session_id = current OR another session belonging to the episode'.
+    """
     from app.main import app
     from fastapi.testclient import TestClient
     client = TestClient(app)
@@ -485,12 +493,16 @@ def test_current_endpoint_resumed_episode_different_session_returns_intervention
     sid2 = s2["session_id"]
     epid2 = s2["intent"]["episode_id"]
     assert sid1 != sid2
-    assert epid1 == epid2
+    assert epid1 == epid2  # same episode, different technical session
 
     current = client.get(f"/dashboard/{uid}/current").json()
     assert current["current_session"]["session_id"] == sid2
-    assert current["latest_intervention"] is not None
-    assert current["latest_intervention"]["session_id"] == sid1
+    # Strict identity: sid2 has no optimization run of its own, so intervention must be null.
+    # The episode-level OR fallback was removed per requirements (Item 5 / Defect 4 tightened).
+    assert current["latest_intervention"] is None, (
+        f"sid2 has no own optimization run; latest_intervention must be null. "
+        f"Got: {current['latest_intervention']}"
+    )
 
 def test_current_endpoint_different_episode_returns_null():
     from app.main import app
