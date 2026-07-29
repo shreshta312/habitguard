@@ -1,11 +1,14 @@
+from pathlib import Path
 from app.services.habitguard_service import HabitGuardService
 from app.services.dataset_service import DatasetService
 
 
-CSV_PATH = "../data/processed/cleaned_screen_time.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CSV_PATH = PROJECT_ROOT / "data" / "processed" / "cleaned_screen_time.csv"
 
 
 def test_user_daily_summary():
+    assert CSV_PATH.exists(), f"Expected CSV dataset to exist at {CSV_PATH}"
     dataset_service = DatasetService(CSV_PATH)
     df = dataset_service.load_data()
 

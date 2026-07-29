@@ -399,3 +399,79 @@ body[data-theme="dark"] .onboarding-btn {
 body[data-theme="dark"] .onboarding-btn:hover {
   background: #B08A63;
 }
+
+/* ── Intent controls ─────────────────────────────────────────────────────── */
+.intent-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.intent-controls select,
+.intent-controls input[type="number"] {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--card-border);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.intent-controls select:focus,
+.intent-controls input[type="number"]:focus {
+  border-color: #7A4A28;
+}
+
+.intent-controls select {
+  flex: 1;
+  min-width: 110px;
+}
+
+.intent-controls input[type="number"] {
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.intent-controls button#setIntentBtn {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: none;
+  background: #34150F;
+  color: #F8ECDB;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+
+.intent-controls button#setIntentBtn:hover {
+  background: #4e2219;
+  transform: translateY(-1px);
+}
+
+.intent-controls button#setIntentBtn:active {
+  transform: translateY(0);
+}
+
+/* Dark theme intent controls */
+body[data-theme="dark"] .intent-controls select,
+body[data-theme="dark"] .intent-controls input[type="number"] {
+  background: #2E1610;
+  border-color: #4A2A1C;
+  color: #EACEAA;
+}
+
+body[data-theme="dark"] .intent-controls button#setIntentBtn {
+  background: #EACEAA;
+  color: #150C0C;
+}
+
+body[data-theme="dark"] .intent-controls button#setIntentBtn:hover {
+  background: #B08A63;
+}

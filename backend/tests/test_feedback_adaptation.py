@@ -13,7 +13,7 @@ def _active_timer_result(overuse_gap):
     }
 
 
-def test_feedback_suppresses_repeatedly_dismissed_site():
+def test_feedback_adjusts_receptivity_on_frequently_dismissed_site():
     engine = DecisionEngine(min_feedback_events=3)
 
     feedback_summary = {
@@ -41,9 +41,7 @@ def test_feedback_suppresses_repeatedly_dismissed_site():
         feedback_summary=feedback_summary
     )
 
-    assert result["should_intervene"] is False
-    assert result["friction_type"] == "NONE"
-    assert result["feedback_adaptation_used"] is True
+    assert result["receptivity_state"] == "BURDENED"
 
 
 def test_feedback_softens_global_low_acceptance():

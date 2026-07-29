@@ -22,6 +22,7 @@ import {
   Film,
   Activity,
   Play,
+  RotateCw,
 } from "lucide-react";
 import { fetchUsageSummary } from "../api/usageApi";
 import ProfileQuestionnaire from "../components/ProfileQuestionnaire";
@@ -240,7 +241,7 @@ function DomainRow({ item, index, accents }) {
 
 // ── Main exported dashboard ──────────────────────────────────────────────────
 
-export default function HabitGuardDashboard() {
+export default function HabitGuardDashboard({ showDebug = false }) {
   const [theme, setTheme] = useState("light");
   const [dashboardData, setDashboardData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -252,28 +253,31 @@ export default function HabitGuardDashboard() {
   const greeting = getTimeBasedGreeting();
   const displayName = getDisplayName();
 
-  useEffect(() => {
-    let cancelled = false;
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-    async function loadLiveUsage() {
-      try {
-        setIsLoading(true);
-        setApiError("");
-        const summary = await fetchUsageSummary();
-        if (!cancelled) setDashboardData(summary);
-      } catch (error) {
-        console.error("Failed to fetch HabitGuard usage summary:", error);
-        if (!cancelled) {
-          setApiError("Could not connect to HabitGuard backend. Start FastAPI and refresh this page.");
-          setDashboardData(null);
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
+  async function loadLiveUsage(isManual = false) {
+    try {
+      if (isManual) setIsRefreshing(true);
+      else setIsLoading(true);
+      setApiError("");
+      const summary = await fetchUsageSummary();
+      setDashboardData(summary);
+    } catch (error) {
+      console.error("Failed to fetch HabitGuard usage summary:", error);
+      setApiError("Could not connect to HabitGuard backend. Start FastAPI and refresh this page.");
+      setDashboardData(null);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
     }
+  }
 
-    loadLiveUsage();
-    return () => { cancelled = true; };
+  useEffect(() => {
+    loadLiveUsage(false);
+    const interval = setInterval(() => {
+      loadLiveUsage(false);
+    }, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const accents = THEME_ACCENTS[theme];
@@ -431,6 +435,17 @@ export default function HabitGuardDashboard() {
 
             <button
               type="button"
+              onClick={() => loadLiveUsage(true)}
+              disabled={isRefreshing}
+              className="hg-btn-secondary"
+              title="Refresh live data from backend"
+            >
+              <RotateCw size={14} className={isRefreshing ? "animate-spin" : ""} />
+              {isRefreshing ? "Refreshing..." : "Refresh"}
+            </button>
+
+            <button
+              type="button"
               onClick={() => setTheme(theme === "light" ? "dark" : "light")}
               className="hg-icon-btn flex h-10 w-10 items-center justify-center rounded-full transition"
               aria-label="Toggle theme"
@@ -501,7 +516,7 @@ export default function HabitGuardDashboard() {
         />
 
         {/* ── ML Insights ── */}
-        {dashboardReady && (
+        {showDebug && dashboardReady && (
           <MLInsightsPanel
             anomalyData={anomalyData}
             forecastData={forecastData}
@@ -598,7 +613,7 @@ export default function HabitGuardDashboard() {
         <WeeklyRecapCard weeklyTrend={weeklyTrend} accents={accents} />
 
         {/* ── Model Diagnostics ── */}
-        <DiagnosticsPanel />
+        {showDebug && <DiagnosticsPanel />}
 
         <p className="hg-mono mt-8 text-center text-xs" style={{ color: "var(--text-dim)" }}>
           HabitGuard · JITAI-based intervention · live backend dashboard

@@ -1,20 +1,47 @@
+from typing import Dict, Any, Optional
+
+def clamp(val: float, min_val: float = 0.0, max_val: float = 1.0) -> float:
+    return max(min_val, min(max_val, val))
+
 class DecisionEngine:
     """
-    Combines the structural timer output with live Chrome context.
-
-    StructuralTimerEngine answers:
-        "What does the user's usage pattern suggest?"
-
-    DecisionEngine answers:
-        "Given the current context, should HabitGuard intervene,
-         and what kind of intervention should it show?"
+    Consumes optimizer output (or legacy timer_result) and live context to make intervention decisions.
+    Supports both canonical optimization results and legacy timer dictionaries for test backward compatibility.
     """
-
-    def __init__(self, min_feedback_events=3):
+    def __init__(self, min_feedback_events=3, min_cooldown_minutes: float = 15.0):
         self.min_feedback_events = min_feedback_events
+        self.min_cooldown_minutes = min_cooldown_minutes
 
-    def decide(self, timer_result, context=None, feedback_summary=None):
+    def decide(
+        self,
+        timer_result: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        feedback_summary: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         context = context or {}
+        fb = feedback_summary or {}
+
+        # Handle Empty History or Calibration
+        if timer_result.get("mode") == "NO_DATA":
+            return {
+                "mode": "NO_DATA",
+                "timer_active": False,
+                "usage_status": "INSUFFICIENT_DATA",
+                "friction_type": "NONE",
+                "recommended_timer_minutes": None,
+                "overuse_gap_minutes": 0,
+                "baseline_usage_minutes": 0,
+                "recent_usage_minutes": 0,
+                "rho_user": 0,
+                "intervention_type": "NONE",
+                "should_intervene": False,
+                "decision_reason": "No usage history available.",
+                "message": "Start browsing to establish baseline.",
+                "context_used": context,
+                "feedback_adaptation_used": False,
+                "feedback_adaptation_reason": "No feedback adaptation applied.",
+                "error": timer_result.get("error", "No usage history available")
+            }
 
         if timer_result.get("mode") == "CALIBRATION":
             return {
@@ -23,396 +50,194 @@ class DecisionEngine:
                 "usage_status": "COLLECTING_BASELINE",
                 "friction_type": "NONE",
                 "recommended_timer_minutes": None,
+                "overuse_gap_minutes": 0,
+                "baseline_usage_minutes": timer_result.get("baseline_usage_minutes", 0),
+                "recent_usage_minutes": timer_result.get("recent_usage_minutes", 0),
+                "rho_user": timer_result.get("rho_user", 0.3),
                 "intervention_type": "NONE",
                 "should_intervene": False,
                 "decision_reason": "HabitGuard is still collecting baseline data.",
-                "message": timer_result.get("message")
+                "message": timer_result.get("message"),
+                "context_used": context,
+                "feedback_adaptation_used": False,
+                "feedback_adaptation_reason": "Calibration mode active."
             }
 
-        overuse_gap = timer_result.get("overuse_gap_minutes", 0) or 0
-        recommended_timer = round(timer_result.get("recommended_timer_minutes", 0))
-
         current_domain = context.get("current_domain")
-        current_category = context.get("current_category") or "neutral"
-        session_minutes = context.get("session_minutes") or 0
+        current_category = context.get("current_category", "neutral")
+        session_minutes = context.get("session_minutes", 0)
+        planned_minutes = context.get("planned_minutes") if context.get("planned_minutes") is not None else timer_result.get("planned_minutes")
 
-        usage_status, friction_type, message = self._base_decision_from_overuse(
-            overuse_gap
-        )
+        # Determine session_status
+        if planned_minutes is None or planned_minutes <= 0:
+            session_status = "NO_PLAN"
+        elif session_minutes > planned_minutes:
+            session_status = "OVER_PLAN"
+        elif session_minutes == planned_minutes:
+            session_status = "NEAR_PLAN"
+        else:
+            session_status = "WITHIN_PLAN"
 
-        intervention_type = self._intervention_type_from_friction(friction_type)
-        should_intervene = friction_type != "NONE"
+        overuse_gap = timer_result.get("overuse_gap_minutes", 0) or 0
+        recommended_timer = timer_result.get("recommended_timer_minutes") or timer_result.get("optimized_target")
 
-        decision_reason = (
-            f"Base decision from overuse gap: {overuse_gap} min."
-        )
+        usage_status, friction_type, message = self._base_decision_from_overuse(overuse_gap)
 
-        # Productive context should reduce unnecessary interruptions.
+        feedback_adaptation_used = False
+        feedback_adaptation_reason = "No feedback adaptation applied."
+        suppression_reason = None
+
+        # Evaluate receptivity & prompt burden from feedback summary (do not permanently suppress)
+        high_prompt_burden = False
+        if fb and current_domain and fb.get("most_dismissed_sites"):
+            for site, count in fb.get("most_dismissed_sites", []):
+                if site.lower() == current_domain.lower() and count >= 3:
+                    high_prompt_burden = True
+
+        # Check global low acceptance adaptation
+        if fb and fb.get("total_events", 0) >= self.min_feedback_events:
+            acceptance_rate = fb.get("break_acceptance_rate", fb.get("acceptance_rate", 0.5))
+            if acceptance_rate < 0.2 and friction_type == "STRONG_FRICTION":
+                friction_type = "TIMER_WARNING"
+                feedback_adaptation_used = True
+                feedback_adaptation_reason = "Softened friction due to low past feedback acceptance rate."
+
+        # Context overrides (productive vs temptation)
         if current_category == "productive":
             if friction_type in ("TIMER_WARNING", "STRONG_FRICTION"):
                 friction_type = "SOFT_WARNING"
                 usage_status = "PRODUCTIVE_CONTEXT"
                 intervention_type = "GENTLE_CHECKIN"
                 should_intervene = True
-                message = (
-                    "You're above your usual usage, but this site is marked productive. "
-                    "HabitGuard will keep the intervention gentle."
-                )
-                decision_reason = (
-                    f"Productive site context reduced friction for {current_domain}."
-                )
+                message = "You're above your usual usage, but this site is marked productive. HabitGuard will keep the intervention gentle."
             elif friction_type == "SOFT_WARNING":
                 friction_type = "NONE"
                 usage_status = "STABLE_PRODUCTIVE"
                 intervention_type = "NONE"
                 should_intervene = False
-                message = (
-                    "Usage is slightly above baseline, but the current site is productive. "
-                    "No intervention needed right now."
-                )
-                decision_reason = (
-                    f"Productive site context suppressed soft warning for {current_domain}."
-                )
-
-        # Temptation context should increase urgency when the current session is long.
+                message = "Usage is slightly above baseline, but the current site is productive. No intervention needed right now."
+            else:
+                should_intervene = False
+                intervention_type = "NONE"
         elif current_category == "temptation" and session_minutes >= 10:
             if friction_type == "NONE":
                 usage_status = "TEMPTATION_SESSION"
                 friction_type = "SOFT_WARNING"
                 intervention_type = "REFLECTION_PROMPT"
                 should_intervene = True
-                message = (
-                    "You've been on a temptation site for a while. "
-                    "Pause and check whether this is intentional."
-                )
-                decision_reason = (
-                    f"Temptation site session reached {session_minutes} minutes."
-                )
-
+                message = "You've been on a temptation site for a while. Pause and check whether this is intentional."
             elif friction_type == "SOFT_WARNING":
                 usage_status = "TEMPTATION_OVERUSE"
                 friction_type = "TIMER_WARNING"
                 intervention_type = "TIMER_NUDGE"
                 should_intervene = True
-                message = (
-                    "This temptation-site session is going beyond your usual pattern. "
-                    "A timer is recommended."
-                )
-                decision_reason = (
-                    f"Temptation site + overuse gap of {overuse_gap} min."
-                )
-
-            elif friction_type == "TIMER_WARNING" and overuse_gap > 20:
+                message = "This temptation-site session is going beyond your usual pattern. A timer is recommended."
+            elif overuse_gap >= 15:
                 usage_status = "RISKY_TEMPTATION_USAGE"
                 friction_type = "STRONG_FRICTION"
-                intervention_type = "BREAK_PROMPT"
+                intervention_type = "ACTIVE_BLOCK"
                 should_intervene = True
-                message = (
-                    "This session is high-risk: temptation site plus strong overuse. "
-                    "Take a short break before continuing."
-                )
-                decision_reason = (
-                    f"High overuse gap ({overuse_gap} min) on temptation site."
-                )
+                message = "Heavy overuse on a temptation site."
+            else:
+                intervention_type = self._intervention_type_from_friction(friction_type)
+                should_intervene = True
+        else:
+            intervention_type = self._intervention_type_from_friction(friction_type)
+            should_intervene = friction_type != "NONE"
 
-        feedback_adaptation_used = False
-        feedback_adaptation_reason = "No feedback adaptation applied."
+        # OVER_PLAN message override & suppression_reason logic
+        if session_status == "OVER_PLAN":
+            overrun = round(session_minutes - planned_minutes, 2)
+            overrun_fmt = int(overrun) if (overrun == int(overrun)) else overrun
+            overrun_msg = f"Over plan. {overrun_fmt} min over."
+            if message == "Usage is within normal limits." or "Over plan" not in message:
+                message = overrun_msg
+            if not should_intervene:
+                if timer_result.get("solver_status") == "LEARNING" or timer_result.get("confidence", 1.0) < 0.2:
+                    suppression_reason = "low_confidence"
+                elif overrun < 2.0:
+                    suppression_reason = "small_absolute_overrun"
+                elif current_category == "productive":
+                    suppression_reason = "productive_context"
+                elif timer_result.get("cooldown_active"):
+                    suppression_reason = "cooldown"
+                else:
+                    suppression_reason = "baseline_allowance"
 
-        if feedback_summary is not None:
-            adapted = self._apply_feedback_adaptation(
-               usage_status=usage_status,
-              friction_type=friction_type,
-             intervention_type=intervention_type,
-              should_intervene=should_intervene,
-               message=message,
-              decision_reason=decision_reason,
-                current_domain=current_domain,
-              current_category=current_category,
-              session_minutes=session_minutes,
-              overuse_gap=overuse_gap,
-             feedback_summary=feedback_summary
-          )
+        if timer_result.get("cooldown_active"):
+            should_intervene = False
+            suppression_reason = "cooldown"
+            friction_type = "NONE"
+            message = "Intervention suppressed due to active cooldown."
 
-            usage_status = adapted["usage_status"]
-            friction_type = adapted["friction_type"]
-            intervention_type = adapted["intervention_type"]
-            should_intervene = adapted["should_intervene"]
-            message = adapted["message"]
-            decision_reason = adapted["decision_reason"]
-            feedback_adaptation_used = adapted["feedback_adaptation_used"]
-            feedback_adaptation_reason = adapted["feedback_adaptation_reason"]
+        policy_score = clamp(0.5 * (overuse_gap / 30.0) + 0.5) if should_intervene else 0.0
 
-        response = {
-            "mode": timer_result.get("mode"),
-            "timer_active": timer_result.get("timer_active"),
+        import uuid
+        decision_id = f"dec_{uuid.uuid4().hex[:12]}"
+        should_notify = should_intervene and friction_type in ("SOFT_WARNING", "TIMER_WARNING")
+        should_overlay = should_intervene and friction_type in ("TIMER_WARNING", "STRONG_FRICTION")
+
+        severity_level = "NONE"
+        if friction_type == "SOFT_WARNING":
+            severity_level = "LOW"
+        elif friction_type == "TIMER_WARNING":
+            severity_level = "MEDIUM"
+        elif friction_type == "STRONG_FRICTION":
+            severity_level = "HIGH"
+
+        receptivity_state = "HIGH" if not high_prompt_burden else "BURDENED"
+
+        return {
+            "decision_id": decision_id,
+            "mode": timer_result.get("mode", "ACTIVE"),
+            "timer_active": timer_result.get("timer_active", True),
+            "session_status": session_status,
+            "suppression_reason": suppression_reason,
             "usage_status": usage_status,
             "friction_type": friction_type,
+            "severity": severity_level,
+            "receptivity_state": receptivity_state,
             "recommended_timer_minutes": recommended_timer,
             "overuse_gap_minutes": overuse_gap,
-            "baseline_usage_minutes": timer_result.get("baseline_usage_minutes"),
-            "recent_usage_minutes": timer_result.get("recent_usage_minutes"),
-            "rho_user": timer_result.get("rho_user"),
+            "baseline_usage_minutes": timer_result.get("baseline_usage_minutes", 40),
+            "recent_usage_minutes": timer_result.get("recent_usage_minutes", 40),
+            "rho_user": timer_result.get("rho_user", 0.3),
             "intervention_type": intervention_type,
             "should_intervene": should_intervene,
-            "decision_reason": decision_reason,
+            "should_notify": should_notify,
+            "should_overlay": should_overlay,
+            "cooldown_channel": "notification" if should_notify else ("overlay" if should_overlay else "none"),
+            "cooldown_source": "VERSIONED_DEFAULT",
+            "last_delivered_timestamp": context.get("last_delivered_timestamp"),
+            "next_eligible_timestamp": context.get("next_eligible_timestamp"),
+            "policy_score": round(policy_score, 4),
             "message": message,
+            "decision_reason": f"Base decision from overuse gap: {overuse_gap} min.",
             "context_used": {
                 "current_domain": current_domain,
                 "current_category": current_category,
-                "session_minutes": session_minutes
-            }
+                "session_minutes": session_minutes,
+                "planned_minutes": planned_minutes
+            },
+            "feedback_adaptation_used": feedback_adaptation_used,
+            "feedback_adaptation_reason": feedback_adaptation_reason
         }
 
-        if feedback_summary is not None:
-            response["feedback_adaptation_used"] = feedback_adaptation_used
-            response["feedback_adaptation_reason"] = feedback_adaptation_reason
+    def _base_decision_from_overuse(self, overuse_gap: float):
+        if overuse_gap <= 0:
+            return "STABLE", "NONE", "Usage is within normal limits."
+        elif overuse_gap < 15:
+            return "SLIGHT_OVERUSE", "SOFT_WARNING", f"You have exceeded your baseline by {overuse_gap} minutes."
+        elif overuse_gap < 30:
+            return "MODERATE_OVERUSE", "TIMER_WARNING", f"You have exceeded your baseline by {overuse_gap} minutes."
+        else:
+            return "HEAVY_OVERUSE", "STRONG_FRICTION", f"You are significantly over your baseline ({overuse_gap} minutes)."
 
-        return response
-
-    def _apply_feedback_adaptation(
-     self,
-     usage_status,
-     friction_type,
-     intervention_type,
-     should_intervene,
-     message,
-     decision_reason,
-     current_domain,
-     current_category,
-     session_minutes,
-     overuse_gap,
-     feedback_summary
-     
- ):
-        if not should_intervene:
-            return {
-                "usage_status": usage_status,
-                "friction_type": friction_type,
-                "intervention_type": intervention_type,
-                "should_intervene": should_intervene,
-                "message": message,
-                "decision_reason": decision_reason,
-                "feedback_adaptation_used": False,
-                "feedback_adaptation_reason": "No active intervention to adapt."
-            }
-
-        event_type_counts = feedback_summary.get("event_type_counts", {}) or {}
-
-        overlay_dismissed_count = event_type_counts.get(
-            "overlay_dismissed",
-            feedback_summary.get("overlay_dismissed_count", 0)
-        )
-
-        break_accepted_count = event_type_counts.get(
-            "break_accepted",
-            feedback_summary.get("break_accepted_count", 0)
-        )
-
-        meaningful_feedback_events = overlay_dismissed_count + break_accepted_count
-
-        if meaningful_feedback_events < self.min_feedback_events:
-            return {
-                "usage_status": usage_status,
-                "friction_type": friction_type,
-                "intervention_type": intervention_type,
-                "should_intervene": should_intervene,
-                "message": message,
-                "decision_reason": decision_reason,
-                "feedback_adaptation_used": False,
-                "feedback_adaptation_reason": (
-                    "Not enough feedback events yet for reliable adaptation."
-                )
-            }
-
-        break_acceptance_rate = feedback_summary.get("break_acceptance_rate", 0.0)
-
-        site_dismissals = self._count_for_site(
-            feedback_summary.get("most_dismissed_sites", []),
-            current_domain
-        )
-
-        site_break_accepts = self._count_for_site(
-            feedback_summary.get("most_accepted_break_sites", []),
-            current_domain
-        )
-
-        # Site-specific adaptation:
-        # If the user repeatedly dismisses interventions on this site,
-        # make HabitGuard less aggressive for that site.
-        if current_domain and site_dismissals >= 3 and site_break_accepts == 0:
-            if friction_type == "SOFT_WARNING":
-                return {
-                    "usage_status": "FEEDBACK_SUPPRESSED",
-                    "friction_type": "NONE",
-                    "intervention_type": "NONE",
-                    "should_intervene": False,
-                    "message": (
-                        "HabitGuard noticed that interventions on this site are often dismissed. "
-                        "No intervention is shown right now."
-                    ),
-                    "decision_reason": (
-                        decision_reason
-                        + f" Feedback adaptation suppressed intervention on {current_domain} "
-                        + f"after {site_dismissals} dismissals."
-                    ),
-                    "feedback_adaptation_used": True,
-                    "feedback_adaptation_reason": (
-                        f"Suppressed intervention for {current_domain} because dismissals are high."
-                    )
-                }
-
-            softened_friction = self._soften_friction(friction_type)
-
-            return {
-                "usage_status": "FEEDBACK_SOFTENED_SITE",
-                "friction_type": softened_friction,
-                "intervention_type": self._intervention_type_from_friction(softened_friction),
-                "should_intervene": softened_friction != "NONE",
-                "message": (
-                    "HabitGuard noticed that stronger interventions on this site are often dismissed, "
-                    "so this intervention is softened."
-                ),
-                "decision_reason": (
-                    decision_reason
-                    + f" Feedback adaptation softened intervention on {current_domain} "
-                    + f"after {site_dismissals} dismissals."
-                ),
-                "feedback_adaptation_used": True,
-                "feedback_adaptation_reason": (
-                    f"Softened intervention for {current_domain} because dismissals are high."
-                )
-            }
-
-            # User-specific feedback adaptation:
-        # If this user's break acceptance is very low, reduce friction intensity.
-        # But do NOT fully suppress interventions during severe overuse or
-        # temptation-site sessions.
-        if break_acceptance_rate < 0.25:
-            severe_overuse = overuse_gap >= 30
-            temptation_session = (
-                current_category == "temptation"
-                and session_minutes >= 10
-            )
-
-            if severe_overuse or temptation_session:
-                if friction_type == "STRONG_FRICTION":
-                    softened_friction = "TIMER_WARNING"
-                elif friction_type == "TIMER_WARNING":
-                    softened_friction = "SOFT_WARNING"
-                else:
-                    softened_friction = friction_type
-
-                # During severe overuse, never allow adaptation to fully erase
-                # the intervention.
-                if softened_friction == "NONE":
-                    softened_friction = "SOFT_WARNING"
-            else:
-                softened_friction = self._soften_friction(friction_type)
-
-            return {
-                "usage_status": "FEEDBACK_SOFTENED_USER",
-                "friction_type": softened_friction,
-                "intervention_type": self._intervention_type_from_friction(
-                    softened_friction
-                ),
-                "should_intervene": softened_friction != "NONE",
-                "message": (
-                    "HabitGuard is keeping this intervention gentler because recent break prompts "
-                    "have not been accepted often."
-                ),
-                "decision_reason": (
-                    decision_reason
-                    + f" Feedback adaptation softened friction because this user's break acceptance rate is "
-                    + f"{break_acceptance_rate}. Severe overuse or temptation-session interventions are not fully suppressed."
-                ),
-                "feedback_adaptation_used": True,
-                "feedback_adaptation_reason": (
-                    "Break acceptance rate is low, so friction was softened but not fully removed."
-                )
-            }
-
-        return {
-            "usage_status": usage_status,
-            "friction_type": friction_type,
-            "intervention_type": intervention_type,
-            "should_intervene": should_intervene,
-            "message": message,
-            "decision_reason": decision_reason,
-            "feedback_adaptation_used": False,
-            "feedback_adaptation_reason": "Feedback did not require adaptation."
-        }
-
-    def _count_for_site(self, site_counts, domain):
-        if not domain:
-            return 0
-
-        for item in site_counts:
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
-                site, count = item[0], item[1]
-
-                if site == domain:
-                    return count
-
-            if isinstance(item, dict):
-                site = item.get("site")
-                count = item.get("count", 0)
-
-                if site == domain:
-                    return count
-
-        return 0
-
-    def _soften_friction(self, friction_type):
-        if friction_type == "STRONG_FRICTION":
-            return "TIMER_WARNING"
-
-        if friction_type == "TIMER_WARNING":
-            return "SOFT_WARNING"
-
+    def _intervention_type_from_friction(self, friction_type: str):
         if friction_type == "SOFT_WARNING":
-            return "NONE"
-
-        return friction_type
-
-    def _base_decision_from_overuse(self, overuse_gap):
-        if overuse_gap == 0:
-            return (
-                "STABLE",
-                "NONE",
-                "Your usage is close to your baseline. No intervention needed right now."
-            )
-
-        if overuse_gap <= 10:
-            return (
-                "SLIGHTLY_ABOVE_BASELINE",
-                "SOFT_WARNING",
-                "Your usage is slightly above your normal pattern. Consider taking a short break."
-            )
-
-        if overuse_gap <= 30:
-            return (
-                "HIGH_USAGE",
-                "TIMER_WARNING",
-                "Your usage is noticeably above baseline. A timer limit is recommended."
-            )
-
-        return (
-            "RISKY_USAGE_SPIKE",
-            "STRONG_FRICTION",
-            "Your usage is much higher than usual. A stricter break or blocking intervention is recommended."
-        )
-
-    def _intervention_type_from_friction(self, friction_type):
-        if friction_type == "NONE":
-            return "NONE"
-
-        if friction_type == "SOFT_WARNING":
-            return "GENTLE_CHECKIN"
-
-        if friction_type == "TIMER_WARNING":
+            return "REFLECTION_PROMPT"
+        elif friction_type == "TIMER_WARNING":
             return "TIMER_NUDGE"
-
-        if friction_type == "STRONG_FRICTION":
-            return "BREAK_PROMPT"
-
-        return "GENTLE_CHECKIN"
+        elif friction_type == "STRONG_FRICTION":
+            return "ACTIVE_BLOCK"
+        return "NONE"

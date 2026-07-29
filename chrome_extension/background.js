@@ -1,22 +1,17 @@
 importScripts("config.js");
 
-const API_URL = `${API_BASE_URL}/habitguard/custom/intervention`;
-const USAGE_SNAPSHOT_URL = `${API_BASE_URL}/usage/snapshot`;
-const USAGE_HISTORY_URL = `${API_BASE_URL}/usage/daily-history/local_user`;
+logRuntimeDiagnostics("Background ServiceWorker Startup");
 
-const USAGE_SNAPSHOT_THROTTLE_MS = 2 * 60 * 1000;
 const TRACKING_ALARM_NAME = "habitguard_usage_tracker";
 const JITAI_ALARM_NAME = "habitguard_jitai_checker";
-
-const JITAI_CHECK_INTERVAL_MINUTES = 5;
-const DEFAULT_NOTIFICATION_COOLDOWN_MINUTES = 15;
-const DEFAULT_OVERLAY_COOLDOWN_MINUTES = 20;
-const SESSION_GAP_RESET_MINUTES = 3;
+const USAGE_SNAPSHOT_THROTTLE_MS = 2 * 60 * 1000;
 const MAX_SESSION_HISTORY = 50;
 
-const DEBUG = false;
+const DEBUG = true;
 
 let jitaiRunning = false;
+let sessionSwitchGeneration = 0;
+let sessionSwitchPromise = Promise.resolve();
 
 function debugLog(...args) {
   if (DEBUG) console.log(...args);
@@ -26,19 +21,28 @@ function getTodayKey(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
-
   return `${year}-${month}-${day}`;
 }
 
 function isTrackableUrl(url) {
   if (!url) return false;
+  if (
+    url.startsWith("chrome://") ||
+    url.startsWith("chrome-extension://") ||
+    url.startsWith("devtools://") ||
+    url.startsWith("about:") ||
+    url.startsWith("view-source:") ||
+    url.startsWith("file://")
+  ) {
+    return false;
+  }
   return url.startsWith("http://") || url.startsWith("https://");
 }
 
 function getDomain(url) {
   try {
     const parsedUrl = new URL(url);
-    return parsedUrl.hostname.replace(/^www\./, "");
+    return parsedUrl.hostname.replace(/^www\./, "").toLowerCase();
   } catch {
     return "unknown";
   }
@@ -46,76 +50,63 @@ function getDomain(url) {
 
 function getDefaultDomainCategory(domain) {
   const productiveDomains = [
-    "leetcode.com",
-    "github.com",
-    "stackoverflow.com",
-    "developer.mozilla.org",
-    "docs.python.org",
-    "kaggle.com",
-    "coursera.org",
-    "edx.org",
-    "geeksforgeeks.org",
-    "w3schools.com",
-    "localhost",
-    "127.0.0.1"
+    "leetcode.com", "github.com", "stackoverflow.com", "developer.mozilla.org",
+    "docs.python.org", "kaggle.com", "coursera.org", "edx.org",
+    "geeksforgeeks.org", "w3schools.com"
   ];
-
   const temptationDomains = [
-    "youtube.com",
-    "instagram.com",
-    "facebook.com",
-    "x.com",
-    "twitter.com",
-    "reddit.com",
-    "netflix.com",
-    "primevideo.com",
-    "hotstar.com",
-    "discord.com"
+    "youtube.com", "instagram.com", "facebook.com", "x.com", "twitter.com",
+    "reddit.com", "netflix.com", "primevideo.com", "hotstar.com", "discord.com"
   ];
-
   const mixedDomains = [
-    "chatgpt.com",
-    "google.com",
-    "linkedin.com",
-    "gmail.com",
-    "mail.google.com",
-    "drive.google.com"
+    "chatgpt.com", "google.com", "linkedin.com", "gmail.com", "mail.google.com", "drive.google.com"
   ];
 
-  if (productiveDomains.some((item) => domain.includes(item))) {
-    return "productive";
-  }
-
-  if (temptationDomains.some((item) => domain.includes(item))) {
-    return "temptation";
-  }
-
-  if (mixedDomains.some((item) => domain.includes(item))) {
-    return "mixed";
-  }
-
+  if (productiveDomains.some((item) => domain.includes(item))) return "productive";
+  if (temptationDomains.some((item) => domain.includes(item))) return "temptation";
+  if (mixedDomains.some((item) => domain.includes(item))) return "mixed";
   return "neutral";
 }
 
 async function getDomainCategory(domain) {
   const stored = await chrome.storage.local.get(["userDomainCategories"]);
   const userDomainCategories = stored.userDomainCategories || {};
-
   if (userDomainCategories[domain]) {
     return userDomainCategories[domain];
   }
-
   return getDefaultDomainCategory(domain);
 }
 
 async function getActiveTab() {
-  const tabs = await chrome.tabs.query({
-    active: true,
-    lastFocusedWindow: true
-  });
+  try {
+    const tabs = await chrome.tabs.query({
+      active: true,
+      lastFocusedWindow: true
+    });
+    if (tabs && tabs.length > 0) return tabs[0];
+  } catch {}
 
-  if (!tabs || tabs.length === 0) return null;
-  return tabs[0];
+  try {
+    const tabs = await chrome.tabs.query({
+      active: true,
+      currentWindow: true
+    });
+    if (tabs && tabs.length > 0) return tabs[0];
+  } catch {}
+
+  return null;
+}
+
+async function isSystemActive() {
+  return new Promise((resolve) => {
+    if (!chrome.idle || !chrome.idle.queryState) {
+      resolve(true);
+      return;
+    }
+    chrome.idle.queryState(IDLE_INTERVAL_SECONDS || 60, (state) => {
+      resolve(state === "active");
+    });
+  });
 }
 
 async function getStoredUsage() {
@@ -123,94 +114,193 @@ async function getStoredUsage() {
     "dailyUsageMinutes",
     "domainUsageMinutes",
     "currentSession",
-    "sessionHistory"
+    "sessionHistory",
+    "userDomainCategories",
+    OFFLINE_QUEUE_KEY,
+    "offlineQueueDiagnostics"
   ]);
-
   return {
     dailyUsageMinutes: stored.dailyUsageMinutes || {},
     domainUsageMinutes: stored.domainUsageMinutes || {},
     currentSession: stored.currentSession || null,
-    sessionHistory: stored.sessionHistory || []
+    sessionHistory: stored.sessionHistory || [],
+    userDomainCategories: stored.userDomainCategories || {},
+    offlineQueue: stored[OFFLINE_QUEUE_KEY] || [],
+    offlineQueueDiagnostics: stored.offlineQueueDiagnostics || { totalEnqueued: 0, totalFlushed: 0, totalDropped: 0 }
   };
 }
 
 function closeCurrentSession(currentSession, sessionHistory, endedAt) {
-  if (!currentSession) {
-    return sessionHistory;
-  }
-
+  if (!currentSession) return sessionHistory;
   const completedSession = {
     ...currentSession,
     endedAt,
     durationMinutes: currentSession.sessionMinutes || 0
   };
-
   const updatedHistory = [completedSession, ...sessionHistory];
-
   return updatedHistory.slice(0, MAX_SESSION_HISTORY);
 }
 
-function computeSessionUpdate(domain, category, currentSession, sessionHistory) {
-  const now = Date.now();
+/**
+ * Authoritative background function to reconcile active browser session.
+ * Mutex serialized to prevent race conditions during rapid domain switches.
+ */
+async function reconcileActiveSession(reason) {
+  sessionSwitchPromise = sessionSwitchPromise
+    .then(() => _doReconcileActiveSession(reason))
+    .catch((err) => {
+      console.error("[HabitGuard] reconcile error:", err);
+    });
+  return sessionSwitchPromise;
+}
 
-  if (!currentSession) {
-    return {
-      sessionHistory,
-      currentSession: {
-        domain,
-        category,
-        startedAt: now,
-        lastUpdatedAt: now,
-        sessionMinutes: 1
-      }
-    };
-  }
+async function _doReconcileActiveSession(reason) {
+  const generation = ++sessionSwitchGeneration;
+  console.log(`[HabitGuard] reconcile reason: ${reason}`);
+  console.log(`[HabitGuard] switch generation: ${generation}`);
 
-  const gapMinutes = (now - currentSession.lastUpdatedAt) / (1000 * 60);
-  const domainChanged = currentSession.domain !== domain;
-  const sessionExpired = gapMinutes > SESSION_GAP_RESET_MINUTES;
+  const activeTab = await getActiveTab();
+  const rawUrl = activeTab ? activeTab.url : null;
 
-  if (domainChanged || sessionExpired) {
-    const updatedHistory = closeCurrentSession(
-      currentSession,
-      sessionHistory,
-      now
-    );
-
-    return {
-      sessionHistory: updatedHistory,
-      currentSession: {
-        domain,
-        category,
-        startedAt: now,
-        lastUpdatedAt: now,
-        sessionMinutes: 1
-      }
-    };
-  }
-
-  return {
-    sessionHistory,
-    currentSession: {
-      ...currentSession,
-      category,
-      lastUpdatedAt: now,
-      sessionMinutes: (currentSession.sessionMinutes || 0) + 1
+  let windowFocused = false;
+  if (activeTab && activeTab.windowId !== undefined) {
+    try {
+      const win = await chrome.windows.get(activeTab.windowId);
+      windowFocused = win.focused && win.type === "normal";
+    } catch {
+      windowFocused = false;
     }
-  };
+  }
+
+  const { currentSession, sessionHistory, userDomainCategories } = await getStoredUsage();
+  const storedDomain = currentSession ? currentSession.domain : null;
+  console.log(`[HabitGuard] stored domain: ${storedDomain || "none"}`);
+
+  const isIgnoredUrl = !rawUrl || !isTrackableUrl(rawUrl);
+
+  if (isIgnoredUrl || !windowFocused) {
+    console.log(`[HabitGuard] active domain: null (internal/unfocused)`);
+    return currentSession;
+  }
+
+  const activeDomain = getDomain(rawUrl);
+  console.log(`[HabitGuard] active domain: ${activeDomain}`);
+
+  // Do not track dev localhost/127.0.0.1 unless user explicitly categorized it
+  if ((activeDomain === "localhost" || activeDomain === "127.0.0.1") && !userDomainCategories[activeDomain]) {
+    console.log(`[HabitGuard] active domain: ${activeDomain} ignored (dev server)`);
+    return currentSession;
+  }
+
+  // Same domain and session active
+  if (currentSession && currentSession.domain === activeDomain) {
+    const now = Date.now();
+    const gapMinutes = (now - (currentSession.lastUpdatedAt || now)) / (1000 * 60);
+    if (gapMinutes <= SESSION_RESUME_GAP_MINUTES) {
+      return currentSession;
+    }
+  }
+
+  // Domain changed or gap reset: perform session switch
+  const category = await getDomainCategory(activeDomain);
+  const now = Date.now();
+  const updatedHistory = (currentSession && currentSession.domain !== activeDomain)
+    ? closeCurrentSession(currentSession, sessionHistory, now)
+    : sessionHistory;
+
+  let newSession = null;
+  try {
+    const apiBase = await getApiBaseUrl();
+    const response = await fetch(`${apiBase}/sessions/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: "local_user",
+        domain: activeDomain,
+        purpose: "unknown",
+        intended_minutes: null,
+        timer_mode: "no_timer",
+        remember_today: true
+      })
+    });
+
+    if (response.ok) {
+      const data = await parseApiResponse(response);
+
+      // Race prevention check 1: generation check
+      if (generation !== sessionSwitchGeneration) {
+        console.log(`[HabitGuard] stale switch discarded`);
+        return currentSession;
+      }
+
+      // Race prevention check 2: re-query active domain
+      const recheckTab = await getActiveTab();
+      const recheckDomain = recheckTab ? getDomain(recheckTab.url) : null;
+      if (recheckDomain !== activeDomain) {
+        console.log(`[HabitGuard] stale switch discarded`);
+        return currentSession;
+      }
+
+      newSession = {
+        session_id: data.session_id,
+        episode_id: data.episode_id || (data.intent && data.intent.episode_id),
+        domain: activeDomain,
+        category: category,
+        startedAt: now,
+        lastUpdatedAt: now,
+        sessionMinutes: 0,
+        episodeFocusedMinutes: data.episode_focused_minutes || 0,
+        intentPurpose: data.intent?.purpose || "unknown",
+        intendedMinutes: data.intent?.intended_minutes || null
+      };
+
+      await chrome.storage.local.set({
+        currentSession: newSession,
+        sessionHistory: updatedHistory
+      });
+
+      console.log(`[HabitGuard] session committed`);
+      return newSession;
+    }
+  } catch (err) {
+    console.error("[HabitGuard] reconcile session start error:", err);
+  }
+
+  // Local fallback if fetch failed during switch
+  if (generation === sessionSwitchGeneration) {
+    newSession = {
+      session_id: (currentSession && currentSession.domain === activeDomain) ? currentSession.session_id : null,
+      domain: activeDomain,
+      category: category,
+      startedAt: now,
+      lastUpdatedAt: now,
+      sessionMinutes: (currentSession && currentSession.domain === activeDomain) ? currentSession.sessionMinutes : 0,
+      intentPurpose: "unknown",
+      intendedMinutes: null
+    };
+    await chrome.storage.local.set({ currentSession: newSession, sessionHistory: updatedHistory });
+    console.log(`[HabitGuard] session committed`);
+    return newSession;
+  }
+
+  return currentSession;
 }
 
 async function incrementUsageMinute() {
-  const activeTab = await getActiveTab();
+  const currentSession = await reconcileActiveSession("heartbeat");
 
+  const activeTab = await getActiveTab();
   if (!activeTab || !isTrackableUrl(activeTab.url)) return;
 
   try {
     const windowInfo = await chrome.windows.get(activeTab.windowId);
-    if (!windowInfo.focused) return;
+    if (!windowInfo.focused || windowInfo.type !== "normal") return;
   } catch {
     return;
   }
+
+  const activeState = await isSystemActive();
+  if (!activeState) return;
 
   const todayKey = getTodayKey();
   const domain = getDomain(activeTab.url);
@@ -219,99 +309,254 @@ async function incrementUsageMinute() {
   const {
     dailyUsageMinutes,
     domainUsageMinutes,
-    currentSession,
     sessionHistory
   } = await getStoredUsage();
 
   dailyUsageMinutes[todayKey] = (dailyUsageMinutes[todayKey] || 0) + 1;
+  if (!domainUsageMinutes[todayKey]) domainUsageMinutes[todayKey] = {};
+  domainUsageMinutes[todayKey][domain] = (domainUsageMinutes[todayKey][domain] || 0) + 1;
 
-  if (!domainUsageMinutes[todayKey]) {
-    domainUsageMinutes[todayKey] = {};
-  }
-
-  domainUsageMinutes[todayKey][domain] =
-    (domainUsageMinutes[todayKey][domain] || 0) + 1;
-
-  const {
-    currentSession: newSession,
-    sessionHistory: newHistory
-  } = computeSessionUpdate(
+  const now = Date.now();
+  const updatedSession = currentSession ? {
+    ...currentSession,
+    lastUpdatedAt: now,
+    sessionMinutes: (currentSession.sessionMinutes || 0) + 1
+  } : {
+    session_id: null,
     domain,
     category,
-    currentSession,
-    sessionHistory
-  );
+    startedAt: now,
+    lastUpdatedAt: now,
+    sessionMinutes: 1
+  };
 
   await chrome.storage.local.set({
     dailyUsageMinutes,
     domainUsageMinutes,
-    currentSession: newSession,
-    sessionHistory: newHistory
+    currentSession: updatedSession
   });
 
-  debugLog("HabitGuard tracked 1 minute:", {
-    date: todayKey,
-    domain,
-    category,
-    totalToday: dailyUsageMinutes[todayKey]
+  // Send activity batch to canonical backend if session_id is valid
+  if (updatedSession.session_id) {
+    const clientEventId = `evt_${now}_${Math.random().toString(36).substr(2, 6)}`;
+    const activity = {
+      event_type: "focus_heartbeat",
+      focused_duration_ms: 60000,
+      client_event_id: clientEventId,
+      event_timestamp_utc: new Date().toISOString()
+    };
+    const sent = await sendActivityBatch(updatedSession.session_id, [activity]);
+    if (!sent) {
+      await enqueueOfflineActivity(updatedSession.session_id, activity);
+    }
+  }
+}
+
+function mergeCanonicalSessionIntent(currentSession, canonicalData) {
+  if (!canonicalData) return currentSession;
+  const canonicalIntent = canonicalData.intent || {
+    episode_id: canonicalData.episode_id,
+    purpose: canonicalData.purpose || canonicalData.classification || "unknown",
+    original_intended_minutes: canonicalData.original_intended_minutes ?? null,
+    extension_minutes: canonicalData.extension_minutes ?? 0.0,
+    effective_planned_minutes: canonicalData.effective_planned_minutes ?? null,
+    timer_mode: canonicalData.timer_mode || (canonicalData.effective_planned_minutes ? "planned" : "no_timer"),
+    episode_status: canonicalData.session_status === "NO_PLAN" ? "NO_PLAN" : "ACTIVE"
+  };
+
+  const canonicalEpisodeId = canonicalData.episode_id || canonicalIntent.episode_id;
+  const currentEpisodeId = currentSession ? (currentSession.episode_id || currentSession.intent?.episode_id) : null;
+
+  if (!currentSession || (canonicalEpisodeId && currentEpisodeId && canonicalEpisodeId !== currentEpisodeId)) {
+    // New episode or episode mismatch: replace intent completely
+    return {
+      ...currentSession,
+      session_id: canonicalData.session_id || currentSession?.session_id,
+      episode_id: canonicalEpisodeId,
+      domain: canonicalData.domain || currentSession?.domain,
+      episodeFocusedMinutes: canonicalData.episode_focused_minutes ?? canonicalData.focused_minutes ?? currentSession?.episodeFocusedMinutes ?? 0,
+      intentPurpose: canonicalIntent.purpose || "unknown",
+      intendedMinutes: canonicalIntent.effective_planned_minutes ?? canonicalIntent.original_intended_minutes ?? null,
+      intent: canonicalIntent
+    };
+  } else {
+    // Same episode: retain existing purpose if canonicalIntent.purpose is missing/unknown, but update intent fields
+    const mergedPurpose = (canonicalIntent.purpose && canonicalIntent.purpose !== "unknown")
+      ? canonicalIntent.purpose
+      : (currentSession.intent?.purpose || currentSession.intentPurpose || "unknown");
+
+    const mergedIntended = canonicalIntent.effective_planned_minutes ?? canonicalIntent.original_intended_minutes ?? currentSession.intendedMinutes;
+
+    const mergedIntent = {
+      ...currentSession.intent,
+      ...canonicalIntent,
+      purpose: mergedPurpose,
+      effective_planned_minutes: mergedIntended
+    };
+
+    return {
+      ...currentSession,
+      session_id: canonicalData.session_id || currentSession.session_id,
+      episode_id: canonicalEpisodeId || currentSession.episode_id,
+      episodeFocusedMinutes: canonicalData.episode_focused_minutes ?? canonicalData.focused_minutes ?? currentSession.episodeFocusedMinutes,
+      intentPurpose: mergedPurpose,
+      intendedMinutes: mergedIntended,
+      intent: mergedIntent
+    };
+  }
+}
+
+/**
+ * Send a batch of activities to the canonical backend.
+ * Returns true on HTTP 200-299, false on network error.
+ */
+async function sendActivityBatch(sessionId, activities) {
+  try {
+    const apiBase = await getApiBaseUrl();
+    const response = await fetch(`${apiBase}/sessions/${sessionId}/activity/batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activities })
+    });
+    if (response.ok) {
+      const batchData = await parseApiResponse(response);
+      const stored = await chrome.storage.local.get(["currentSession"]);
+      const updatedSess = mergeCanonicalSessionIntent(stored.currentSession, batchData);
+
+      await chrome.storage.local.set({
+        currentSession: updatedSess,
+        latestIntervention: batchData,
+        latestInterventionCheckedAt: Date.now()
+      });
+      await updateBadge(batchData);
+      if (batchData.should_intervene && shouldTriggerNotification(batchData)) {
+        await showInterventionNotification(batchData);
+      }
+      return true;
+    }
+    // Session expired (404) on backend: return true so caller does not queue dead session events
+    if (response.status === 404) return true;
+    return false;
+  } catch (err) {
+    // Network error — tell caller to enqueue
+    return false;
+  }
+}
+
+/**
+ * Add an activity event to persistent offline queue in chrome.storage.local.
+ */
+async function enqueueOfflineActivity(sessionId, activity) {
+  const { offlineQueue, offlineQueueDiagnostics } = await getStoredUsage();
+  const newDiagnostics = { ...offlineQueueDiagnostics };
+
+  const item = {
+    session_id: sessionId,
+    client_event_id: activity.client_event_id,
+    event_timestamp_utc: activity.event_timestamp_utc || new Date().toISOString(),
+    event_type: activity.event_type || "focus_heartbeat",
+    focused_duration_ms: activity.focused_duration_ms || 60000,
+    retry_count: 0,
+    enqueue_timestamp: new Date().toISOString()
+  };
+
+  offlineQueue.push(item);
+  newDiagnostics.totalEnqueued = (newDiagnostics.totalEnqueued || 0) + 1;
+
+  // Enforce queue limit: drop oldest
+  if (offlineQueue.length > MAX_OFFLINE_QUEUE) {
+    const overflow = offlineQueue.length - MAX_OFFLINE_QUEUE;
+    offlineQueue.splice(0, overflow);
+    newDiagnostics.totalDropped = (newDiagnostics.totalDropped || 0) + overflow;
+  }
+
+  await chrome.storage.local.set({
+    [OFFLINE_QUEUE_KEY]: offlineQueue,
+    offlineQueueDiagnostics: newDiagnostics
   });
+  debugLog(`HabitGuard persistent queue: ${offlineQueue.length} pending events`);
+}
+
+/**
+ * Flush persistent offline queue by grouping by session_id and resending batches.
+ */
+async function flushOfflineQueue() {
+  const { offlineQueue, offlineQueueDiagnostics } = await getStoredUsage();
+  if (!offlineQueue || offlineQueue.length === 0) return;
+
+  const newDiagnostics = { ...offlineQueueDiagnostics };
+  const bySession = {};
+
+  for (const entry of offlineQueue) {
+    const sid = entry.session_id;
+    if (!sid) continue;
+    if (!bySession[sid]) bySession[sid] = [];
+    bySession[sid].push(entry);
+  }
+
+  const failedQueue = [];
+
+  for (const [sessionId, entries] of Object.entries(bySession)) {
+    const activities = entries.map((e) => ({
+      event_type: e.event_type,
+      focused_duration_ms: e.focused_duration_ms,
+      client_event_id: e.client_event_id,
+      event_timestamp_utc: e.event_timestamp_utc
+    }));
+
+    const ok = await sendActivityBatch(sessionId, activities);
+    if (ok) {
+      newDiagnostics.totalFlushed = (newDiagnostics.totalFlushed || 0) + entries.length;
+    } else {
+      // Retain failed items and increment retry count
+      entries.forEach((e) => { e.retry_count = (e.retry_count || 0) + 1; });
+      failedQueue.push(...entries);
+    }
+  }
+
+  await chrome.storage.local.set({
+    [OFFLINE_QUEUE_KEY]: failedQueue,
+    offlineQueueDiagnostics: newDiagnostics
+  });
+
+  if (failedQueue.length > 0) {
+    debugLog(`HabitGuard queue flush: ${failedQueue.length} events remaining`);
+  }
 }
 
 async function parseApiResponse(response) {
   const text = await response.text();
-
-  if (!text) {
-    return {};
-  }
-
+  if (!text) return {};
   try {
     return JSON.parse(text);
   } catch {
-    return {
-      raw_response: text
-    };
+    return { raw_response: text };
   }
 }
 
 async function getDailyUsageHistory() {
   const { dailyUsageMinutes } = await getStoredUsage();
-
-  const mergedUsage = {
-    ...dailyUsageMinutes
-  };
-
+  const mergedUsage = { ...dailyUsageMinutes };
   try {
-    const response = await fetch(USAGE_HISTORY_URL);
-
+    const apiBase = await getApiBaseUrl();
+    const response = await fetch(`${apiBase}/usage/daily-history/local_user`);
     if (response.ok) {
       const backendHistory = await parseApiResponse(response);
       const dailyHistory = backendHistory.daily_usage_history || [];
-
       dailyHistory.forEach((item) => {
-        if (item.date) {
-          mergedUsage[item.date] = Number(item.minutes || 0);
-        }
+        if (item.date) mergedUsage[item.date] = Number(item.minutes || 0);
       });
     }
   } catch (error) {
-    console.warn(
-      "Could not load backend usage history. Using local history only.",
-      error
-    );
+    console.warn("Could not load backend usage history. Using local history only.", error);
   }
-
   const dates = Object.keys(mergedUsage).sort();
-
   return dates.map((date) => mergedUsage[date]);
 }
 
 function shouldTriggerNotification(intervention) {
-  if (!intervention || !intervention.should_intervene) {
-    return false;
-  }
-
+  if (!intervention || !intervention.should_intervene) return false;
   const frictionType = intervention.friction_type;
-
   return (
     frictionType === "SOFT_WARNING" ||
     frictionType === "TIMER_WARNING" ||
@@ -321,72 +566,226 @@ function shouldTriggerNotification(intervention) {
 
 function getInterventionCooldownMinutes(intervention, fallbackMinutes) {
   const value = Number(intervention?.cooldown_minutes);
-
-  if (!Number.isFinite(value) || value <= 0) {
-    return fallbackMinutes;
-  }
-
+  if (!Number.isFinite(value) || value <= 0) return fallbackMinutes;
   return Math.min(120, Math.max(5, value));
 }
 
 async function isNotificationCooldownActive(intervention) {
   const stored = await chrome.storage.local.get(["lastNotificationAt"]);
   const lastNotificationAt = stored.lastNotificationAt;
-
   if (!lastNotificationAt) return false;
-
   const elapsedMinutes = (Date.now() - lastNotificationAt) / (1000 * 60);
-  const cooldownMinutes = getInterventionCooldownMinutes(
-    intervention,
-    DEFAULT_NOTIFICATION_COOLDOWN_MINUTES
-  );
-
+  const cooldownMinutes = getInterventionCooldownMinutes(intervention, DEFAULT_NOTIFICATION_COOLDOWN_MINUTES);
   return elapsedMinutes < cooldownMinutes;
 }
 
-async function isOverlayCooldownActive(domain, intervention) {
-  if (!domain) return false;
+async function recordDeliveryTrace(trace) {
+  try {
+    const stored = await chrome.storage.local.get(["deliveryTraceHistory"]);
+    const history = stored.deliveryTraceHistory || [];
+    history.unshift(trace);
+    await chrome.storage.local.set({ deliveryTraceHistory: history.slice(0, 50) });
 
-  const stored = await chrome.storage.local.get(["overlayCooldownByDomain"]);
-  const overlayCooldownByDomain = stored.overlayCooldownByDomain || {};
-  const lastOverlayShownAt = overlayCooldownByDomain[domain];
-
-  if (!lastOverlayShownAt) return false;
-
-  const elapsedMinutes = (Date.now() - lastOverlayShownAt) / (1000 * 60);
-  const cooldownMinutes = getInterventionCooldownMinutes(
-    intervention,
-    DEFAULT_OVERLAY_COOLDOWN_MINUTES
-  );
-
-  return elapsedMinutes < cooldownMinutes;
+    const apiBase = await getApiBaseUrl();
+    await fetch(`${apiBase}/jitai/delivery-trace`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(trace)
+    }).catch((err) => console.warn("[HabitGuard] trace sync failed:", err));
+  } catch (err) {
+    console.error("[HabitGuard] recordDeliveryTrace error:", err);
+  }
 }
 
 async function showInterventionNotification(intervention) {
+  const stored = await chrome.storage.local.get(["currentSession", "consumedDecisionIds"]);
+  const currentSession = stored.currentSession;
+  const consumedIds = new Set(stored.consumedDecisionIds || []);
+
+  const decisionId = intervention?.decision_id || `dec_${Date.now()}`;
+  const sessionId = currentSession?.session_id || "unknown_session";
+  const episodeId = currentSession?.episode_id || null;
+  const domain = currentSession?.domain || intervention?.domain || "unknown_domain";
+  const attemptedAt = new Date().toISOString();
+
+  // Idempotency check: prevent duplicate notifications for the same decision_id
+  if (consumedIds.has(decisionId)) {
+    debugLog(`[HabitGuard] Decision ${decisionId} already consumed. Skipping duplicate notification.`);
+    return;
+  }
+  consumedIds.add(decisionId);
+  await chrome.storage.local.set({ consumedDecisionIds: Array.from(consumedIds).slice(-100) });
+
+  if (!intervention || !intervention.should_notify) {
+    await recordDeliveryTrace({
+      decision_id: decisionId,
+      session_id: sessionId,
+      episode_id: episodeId,
+      user_id: "local_user",
+      domain,
+      channel: "notification",
+      requested_channel: "notification",
+      fallback_channel: null,
+      intervention_preserved: false,
+      should_notify: false,
+      should_overlay: false,
+      eligible: false,
+      attempted_at_utc: attemptedAt,
+      delivery_status: "NOT_ELIGIBLE",
+      chrome_notification_id: null,
+      failure_reason: "Notification not required for decision"
+    });
+    return;
+  }
+
   const cooldownActive = await isNotificationCooldownActive(intervention);
-  if (cooldownActive) return;
+  if (cooldownActive) {
+    await recordDeliveryTrace({
+      decision_id: decisionId,
+      session_id: sessionId,
+      episode_id: episodeId,
+      user_id: "local_user",
+      domain,
+      channel: "notification",
+      requested_channel: "notification",
+      fallback_channel: "badge_popup",
+      intervention_preserved: true,
+      should_notify: true,
+      should_overlay: false,
+      eligible: false,
+      attempted_at_utc: attemptedAt,
+      delivery_status: "SUPPRESSED",
+      chrome_notification_id: null,
+      failure_reason: "cooldown_active",
+      cooldown_source: "VERSIONED_DEFAULT",
+      next_eligible_at: new Date(Date.now() + 15 * 60 * 1000).toISOString()
+    });
+    const updated = {
+      ...intervention,
+      delivery_status: "SUPPRESSED",
+      suppression_reason: "cooldown_active",
+      fallback_channel: "badge_popup",
+      intervention_preserved: true
+    };
+    await chrome.storage.local.set({ latestIntervention: updated });
+    return;
+  }
 
-  const timer = intervention.recommended_timer_minutes;
+  // Fallback handler for permission denial or API failure
+  const handleFallback = async (status, reason) => {
+    await updateBadge({ ...intervention, friction_type: intervention.friction_type || "SOFT_WARNING" });
+    const overlayEligible = !!intervention.should_overlay;
+
+    await recordDeliveryTrace({
+      decision_id: decisionId,
+      session_id: sessionId,
+      episode_id: episodeId,
+      user_id: "local_user",
+      domain,
+      channel: "notification",
+      requested_channel: "notification",
+      fallback_channel: overlayEligible ? "badge_popup_overlay" : "badge_popup",
+      intervention_preserved: true,
+      should_notify: true,
+      should_overlay: overlayEligible,
+      eligible: true,
+      attempted_at_utc: attemptedAt,
+      delivery_status: status,
+      chrome_notification_id: null,
+      failure_reason: reason
+    });
+
+    const updatedIntervention = {
+      ...intervention,
+      delivery_status: status,
+      failure_reason: reason,
+      fallback_channel: overlayEligible ? "badge_popup_overlay" : "badge_popup",
+      intervention_preserved: true
+    };
+    await chrome.storage.local.set({ latestIntervention: updatedIntervention });
+  };
+
+  if (typeof chrome === "undefined" || !chrome.notifications) {
+    await handleFallback("PERMISSION_DENIED", "chrome.notifications API missing or permission denied");
+    return;
+  }
+
+  const timer = intervention.recommended_remaining || intervention.recommended_timer_minutes;
   const status = intervention.usage_status || "Usage alert";
-
-  let message =
-    intervention.message || "HabitGuard recommends taking a short break.";
-
+  let message = intervention.message || "HabitGuard recommends taking a short break.";
   if (timer !== null && timer !== undefined) {
     message = `${message} Suggested timer: ${timer} min.`;
   }
 
-  await chrome.notifications.create({
-    type: "basic",
-    iconUrl: "icon128.png",
-    title: `HabitGuard: ${status}`,
-    message,
-    priority: 2
+  const notifId = `hg_notif_${Date.now()}`;
+
+  // Log ATTEMPTED
+  await recordDeliveryTrace({
+    decision_id: decisionId,
+    session_id: sessionId,
+    episode_id: episodeId,
+    user_id: "local_user",
+    domain,
+    channel: "notification",
+    requested_channel: "notification",
+    fallback_channel: null,
+    intervention_preserved: true,
+    should_notify: true,
+    should_overlay: false,
+    eligible: true,
+    attempted_at_utc: attemptedAt,
+    delivery_status: "ATTEMPTED",
+    chrome_notification_id: notifId,
+    failure_reason: null
   });
 
-  await chrome.storage.local.set({
-    lastNotificationAt: Date.now()
-  });
+  try {
+    chrome.notifications.create(notifId, {
+      type: "basic",
+      iconUrl: "icon128.png",
+      title: `HabitGuard: ${status}`,
+      message,
+      priority: 2
+    }, async (createdId) => {
+      if (chrome.runtime.lastError) {
+        await handleFallback("FAILED", chrome.runtime.lastError.message);
+      } else {
+        const nextEligibleIso = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+        await recordDeliveryTrace({
+          decision_id: decisionId,
+          session_id: sessionId,
+          episode_id: episodeId,
+          user_id: "local_user",
+          domain,
+          channel: "notification",
+          requested_channel: "notification",
+          fallback_channel: null,
+          intervention_preserved: true,
+          should_notify: true,
+          should_overlay: false,
+          eligible: true,
+          attempted_at_utc: attemptedAt,
+          delivery_status: "API_ACCEPTED",
+          chrome_notification_id: createdId || notifId,
+          failure_reason: null,
+          cooldown_source: "VERSIONED_DEFAULT",
+          next_eligible_at: nextEligibleIso
+        });
+
+        await chrome.storage.local.set({
+          lastNotificationAt: Date.now(),
+          latestIntervention: {
+            ...intervention,
+            delivery_status: "API_ACCEPTED",
+            last_notification_accepted_at: new Date().toISOString(),
+            next_eligible_at: nextEligibleIso
+          }
+        });
+      }
+    });
+  } catch (err) {
+    await handleFallback("FAILED", String(err));
+  }
 }
 
 async function updateBadge(intervention) {
@@ -394,105 +793,30 @@ async function updateBadge(intervention) {
     await chrome.action.setBadgeText({ text: "" });
     return;
   }
-
   const frictionType = intervention.friction_type;
-
   if (frictionType === "STRONG_FRICTION") {
     await chrome.action.setBadgeText({ text: "!" });
     await chrome.action.setBadgeBackgroundColor({ color: "#dc2626" });
     return;
   }
-
   if (frictionType === "TIMER_WARNING") {
     await chrome.action.setBadgeText({ text: "T" });
     await chrome.action.setBadgeBackgroundColor({ color: "#f97316" });
     return;
   }
-
   if (frictionType === "SOFT_WARNING") {
     await chrome.action.setBadgeText({ text: "S" });
     await chrome.action.setBadgeBackgroundColor({ color: "#2563eb" });
     return;
   }
-
   await chrome.action.setBadgeText({ text: "" });
-}
-
-function shouldTriggerOverlay(intervention, currentSession) {
-  if (!intervention || !currentSession) {
-    return false;
-  }
-
-  const shouldIntervene = intervention.should_intervene;
-  const frictionType = intervention.friction_type;
-  const category = currentSession.category;
-  const sessionMinutes = currentSession.sessionMinutes || 0;
-
-  const riskyTemptationSession =
-    category === "temptation" && sessionMinutes >= 10;
-
-  const strongEnough =
-    frictionType === "STRONG_FRICTION" ||
-    frictionType === "TIMER_WARNING" ||
-    (frictionType === "SOFT_WARNING" && riskyTemptationSession);
-
-  return shouldIntervene && strongEnough && riskyTemptationSession;
-}
-
-async function sendOverlayToActiveTab(intervention, currentSession) {
-  if (!currentSession) return;
-
-  const activeTab = await getActiveTab();
-
-  if (!activeTab || !activeTab.id || !isTrackableUrl(activeTab.url)) {
-    return;
-  }
-
-  const payload = {
-    domain: currentSession.domain,
-    category: currentSession.category,
-    sessionMinutes: currentSession.sessionMinutes || 0,
-    timerMinutes: intervention.recommended_timer_minutes,
-    status: intervention.usage_status,
-
-    // Keep all three names so content.js can read it safely.
-    frictionType: intervention.friction_type,
-    friction_type: intervention.friction_type,
-    frictionLevel: intervention.friction_type,
-
-    message: intervention.message
-  };
-
-  try {
-    await chrome.tabs.sendMessage(activeTab.id, {
-      type: "SHOW_HABITGUARD_OVERLAY",
-      payload
-    });
-
-    const now = Date.now();
-
-    const stored = await chrome.storage.local.get(["overlayCooldownByDomain"]);
-    const overlayCooldownByDomain = stored.overlayCooldownByDomain || {};
-
-    overlayCooldownByDomain[currentSession.domain] = now;
-
-    await chrome.storage.local.set({
-      lastOverlayShownAt: now,
-      lastOverlayPayload: payload,
-      overlayCooldownByDomain
-    });
-  } catch (error) {
-    console.error("HabitGuard overlay failed:", error);
-  }
 }
 
 async function sendUsageSnapshot(latestIntervention = null, options = {}) {
   const { force = false, source = "chrome_extension" } = options;
-
   try {
     const todayKey = getTodayKey();
     const now = Date.now();
-
     const stored = await chrome.storage.local.get([
       "dailyUsageMinutes",
       "domainUsageMinutes",
@@ -504,20 +828,11 @@ async function sendUsageSnapshot(latestIntervention = null, options = {}) {
     ]);
 
     const lastSnapshotAt = stored.lastUsageSnapshotAt || 0;
-
     if (!force && now - lastSnapshotAt < USAGE_SNAPSHOT_THROTTLE_MS) {
-      await chrome.storage.local.set({
-        lastUsageSnapshotSkippedAt: now,
-        lastUsageSnapshotSkipReason: "throttled"
-      });
-
-      return {
-        success: true,
-        skipped: true,
-        reason: "throttled"
-      };
+      return { success: true, skipped: true, reason: "throttled" };
     }
 
+    const apiBase = await getApiBaseUrl();
     const body = {
       user_id: "local_user",
       date: todayKey,
@@ -525,140 +840,54 @@ async function sendUsageSnapshot(latestIntervention = null, options = {}) {
       domain_usage_minutes: stored.domainUsageMinutes || {},
       current_session: stored.currentSession || null,
       session_history: stored.sessionHistory || [],
-      latest_intervention:
-        latestIntervention || stored.latestIntervention || null,
+      latest_intervention: latestIntervention || stored.latestIntervention || null,
       active_intervention_timer: stored.activeInterventionTimer || null,
       source
     };
 
-    const response = await fetch(USAGE_SNAPSHOT_URL, {
+    const response = await fetch(`${apiBase}/usage/snapshot`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
-
     const data = await parseApiResponse(response);
-
-    const result = {
-      success: response.ok,
-      status: response.status,
-      data
-    };
-
+    const result = { success: response.ok, status: response.status, data };
     await chrome.storage.local.set({
-      lastUsageSnapshotAt: response.ok
-        ? now
-        : stored.lastUsageSnapshotAt || null,
+      lastUsageSnapshotAt: response.ok ? now : stored.lastUsageSnapshotAt || null,
       lastUsageSnapshotResult: result
     });
-
-    if (!response.ok) {
-      console.error("HabitGuard usage snapshot failed:", result);
-    }
-
     return result;
   } catch (error) {
     console.error("HabitGuard usage snapshot failed:", error);
-
-    await chrome.storage.local.set({
-      lastUsageSnapshotError: error.message,
-      lastUsageSnapshotFailedAt: Date.now()
-    });
-
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   }
 }
 
 async function runJitaiCheck() {
-  if (jitaiRunning) {
-    debugLog("HabitGuard JITAI: skipping, previous check still in flight.");
-    return;
-  }
-
+  if (jitaiRunning) return;
   jitaiRunning = true;
-
   try {
-    const usageHistory = await getDailyUsageHistory();
+    const currentSession = await reconcileActiveSession("jitai_check");
 
-    if (usageHistory.length === 0) return;
-
-    const todayKey = getTodayKey();
-
-    const storedContext = await chrome.storage.local.get([
-      "currentSession",
-      "domainUsageMinutes"
-    ]);
-
-    const currentSession = storedContext.currentSession || null;
-    const domainUsageMinutes = storedContext.domainUsageMinutes || {};
-
-    const response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        user_id: "local_user",
-        usage_history_minutes: usageHistory,
-        context: {
-          current_domain: currentSession?.domain || null,
-          current_category: currentSession?.category || null,
-          session_minutes: currentSession?.sessionMinutes || 0,
-          top_domains: domainUsageMinutes[todayKey] || {},
-          timestamp: Date.now()
-        }
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Backend returned ${response.status}`);
-    }
-
-    const intervention = await parseApiResponse(response);
-
-    await chrome.storage.local.set({
-      latestIntervention: intervention,
-      latestInterventionCheckedAt: Date.now()
-    });
-
-    await sendUsageSnapshot(intervention);
-    await updateBadge(intervention);
-
-    const shouldNotify =
-      intervention.should_notify === true ||
-      (
-        intervention.should_notify === undefined &&
-        shouldTriggerNotification(intervention)
-      );
-
-    if (shouldNotify) {
-      await showInterventionNotification(intervention);
-    }
-
-    const shouldOverlay =
-      intervention.should_overlay === true ||
-      (
-        intervention.should_overlay === undefined &&
-        shouldTriggerOverlay(intervention, currentSession)
-      );
-
-    if (shouldOverlay) {
-      const overlayCooldownActive = await isOverlayCooldownActive(
-        currentSession?.domain,
-        intervention
-      );
-
-      if (!overlayCooldownActive) {
-        await sendOverlayToActiveTab(intervention, currentSession);
+    if (currentSession && currentSession.session_id) {
+      const apiBase = await getApiBaseUrl();
+      const res = await fetch(`${apiBase}/sessions/${currentSession.session_id}/activity/batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ activities: [] })
+      });
+      if (res.ok) {
+        const intervention = await parseApiResponse(res);
+        await chrome.storage.local.set({
+          latestIntervention: intervention,
+          latestInterventionCheckedAt: Date.now()
+        });
+        await sendUsageSnapshot(intervention, { source: "chrome_extension_jitai_check" });
+        await updateBadge(intervention);
       }
     }
 
-    debugLog("HabitGuard JITAI check:", intervention);
+    await flushOfflineQueue();
   } catch (error) {
     console.error("HabitGuard JITAI check failed:", error);
   } finally {
@@ -668,30 +897,62 @@ async function runJitaiCheck() {
 
 async function startAlarms() {
   await chrome.alarms.clearAll();
-
-  await chrome.alarms.create(TRACKING_ALARM_NAME, {
-    periodInMinutes: 1
-  });
-
-  await chrome.alarms.create(JITAI_ALARM_NAME, {
-    periodInMinutes: JITAI_CHECK_INTERVAL_MINUTES
-  });
+  await chrome.alarms.create(TRACKING_ALARM_NAME, { periodInMinutes: ALARM_INTERVAL_MINUTES || 1 });
+  await chrome.alarms.create(JITAI_ALARM_NAME, { periodInMinutes: JITAI_CHECK_INTERVAL_MINUTES || 5 });
 }
 
 async function sendFeedbackEvent(eventType, payload = {}) {
+  const { currentSession } = await getStoredUsage();
+  const sessionId = (currentSession && currentSession.session_id) ? currentSession.session_id : null;
+
+  let actionName = eventType;
+  let taskCompletion = payload.task_completion || null;
+  let timeSufficient = payload.time_sufficient || null;
+
+  if (eventType === "overlay_dismissed") {
+    actionName = "dismiss";
+  } else if (eventType === "break_accepted") {
+    actionName = "extend_5";
+  } else if (eventType === "task_not_finished") {
+    actionName = "task_not_finished";
+    taskCompletion = "not_completed";
+    timeSufficient = "insufficient";
+  } else if (eventType === "finish") {
+    actionName = "finish";
+    taskCompletion = "unknown";
+    timeSufficient = "unknown";
+  } else if (eventType === "stop_reminders") {
+    actionName = "stop_reminders";
+  }
+
+  if (sessionId) {
+    try {
+      const apiBase = await getApiBaseUrl();
+      const canonicalRes = await fetch(`${apiBase}/sessions/${sessionId}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: actionName,
+          task_completion: taskCompletion,
+          time_sufficient: timeSufficient
+        })
+      });
+      const canonicalData = await parseApiResponse(canonicalRes);
+      debugLog("HabitGuard canonical action recorded:", canonicalData);
+    } catch (err) {
+      console.error("HabitGuard canonical action failed:", err);
+    }
+  }
+
   const body = {
     user_id: payload.user_id || "local_user",
     event_type: eventType,
-
     site: payload.site || payload.domain || null,
     category: payload.category || null,
     overlay_id: payload.overlay_id || null,
-
     decision: payload.decision || null,
     reason: payload.reason || null,
-
     timestamp: new Date().toISOString(),
-
     context: {
       ...payload.context,
       domain: payload.domain || null,
@@ -703,113 +964,115 @@ async function sendFeedbackEvent(eventType, payload = {}) {
   };
 
   try {
-    const response = await fetch(`${API_BASE_URL}/feedback/event`, {
+    const apiBase = await getApiBaseUrl();
+    const response = await fetch(`${apiBase}/feedback/event`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
-
     const data = await parseApiResponse(response);
-
-    return {
-      success: response.ok,
-      data
-    };
+    return { success: response.ok, data };
   } catch (error) {
     console.error("HabitGuard feedback send failed:", error);
-
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   }
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  startAlarms();
+// ── Tab & Window listeners for instant session synchronization ─────────────
+
+chrome.tabs.onActivated.addListener(async () => {
+  await reconcileActiveSession("tab_activated");
 });
 
-chrome.runtime.onStartup.addListener(() => {
-  startAlarms();
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.url && tab.active) {
+    await reconcileActiveSession("tab_updated");
+  }
 });
+
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
+    await reconcileActiveSession("window_focused");
+  }
+});
+
+chrome.runtime.onInstalled.addListener(() => { startAlarms(); });
+chrome.runtime.onStartup.addListener(() => { startAlarms(); });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === TRACKING_ALARM_NAME) {
-    incrementUsageMinute();
-  }
-
-  if (alarm.name === JITAI_ALARM_NAME) {
-    runJitaiCheck();
-  }
+  if (alarm.name === TRACKING_ALARM_NAME) incrementUsageMinute();
+  if (alarm.name === JITAI_ALARM_NAME) runJitaiCheck();
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || !message.type) {
-    return;
+  if (!message || !message.type) return;
+
+  if (message.type === "RECONCILE_ACTIVE_SESSION") {
+    reconcileActiveSession("popup_refresh").then((session) => {
+      sendResponse({ session });
+    });
+    return true;
   }
 
-  // Legacy support: older content.js events.
+  if (message.type === "HANDLE_CANONICAL_RESPONSE") {
+    (async () => {
+      const canonicalData = message.data;
+      const stored = await chrome.storage.local.get(["currentSession"]);
+      const updatedSess = mergeCanonicalSessionIntent(stored.currentSession, canonicalData);
+      const checkedAt = Date.now();
+      await chrome.storage.local.set({
+        currentSession: updatedSess,
+        latestIntervention: canonicalData,
+        latestInterventionCheckedAt: checkedAt
+      });
+      await updateBadge(canonicalData);
+      if (canonicalData.should_intervene && shouldTriggerNotification(canonicalData)) {
+        await showInterventionNotification(canonicalData);
+      }
+      sendResponse({ status: "success", session: updatedSess });
+    })();
+    return true;
+  }
+
+  if (message.type === "PROCESS_DECISION") {
+    showInterventionNotification(message.decision).then(() => {
+      sendResponse({ status: "processed" });
+    });
+    return true;
+  }
+
+  if (message.type === "GET_OFFLINE_QUEUE_DEBUG") {
+    getStoredUsage().then(({ offlineQueue, offlineQueueDiagnostics }) => {
+      sendResponse({
+        queueLength: (offlineQueue || []).length,
+        diagnostics: offlineQueueDiagnostics,
+        queue: offlineQueue || []
+      });
+    });
+    return true;
+  }
+
   if (message.type === "HABITGUARD_OVERLAY_DISMISSED") {
     chrome.storage.local.set({
       lastOverlayDismissedAt: Date.now(),
       lastOverlayDismissedPayload: message.payload || null
     });
-
     return;
   }
 
   if (message.type === "HABITGUARD_BREAK_ACCEPTED") {
     const endAt = Date.now() + 5 * 60 * 1000;
-
     chrome.storage.local.set({
       lastBreakAcceptedAt: Date.now(),
       lastBreakAcceptedPayload: message.payload || null,
-      activeInterventionTimer: {
-        type: "break",
-        durationMinutes: 5,
-        endAt
-      }
+      activeInterventionTimer: { type: "break", durationMinutes: 5, endAt }
     });
-
     return;
   }
 
-  // Main feedback event path from content.js.
   if (message.type === "HABITGUARD_FEEDBACK_EVENT") {
     const eventType = message.eventType;
     const payload = message.payload || {};
-
-    if (eventType === "overlay_dismissed") {
-      chrome.storage.local.set({
-        lastOverlayDismissedAt: Date.now(),
-        lastOverlayDismissedPayload: payload
-      });
-    }
-
-    if (eventType === "break_accepted") {
-      const endAt = Date.now() + 5 * 60 * 1000;
-
-      chrome.storage.local.set({
-        lastBreakAcceptedAt: Date.now(),
-        lastBreakAcceptedPayload: payload,
-        activeInterventionTimer: {
-          type: "break",
-          durationMinutes: 5,
-          endAt
-        }
-      });
-    }
-
-    if (eventType === "break_completed" || eventType === "break_skipped") {
-      chrome.storage.local.set({
-        activeInterventionTimer: null,
-        lastBreakEndedAt: Date.now(),
-        lastBreakEndReason: eventType,
-        lastBreakEndPayload: payload
-      });
-    }
 
     sendFeedbackEvent(eventType, payload)
       .then(async (feedbackResult) => {
@@ -817,7 +1080,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           force: true,
           source: `chrome_extension_feedback_${eventType}`
         });
-
         return feedbackResult;
       })
       .then(sendResponse);
@@ -828,8 +1090,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.notifications.onClicked.addListener((notificationId) => {
   chrome.notifications.clear(notificationId);
-
-  chrome.tabs.create({
-    url: chrome.runtime.getURL("popup.html")
-  });
+  chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") });
 });

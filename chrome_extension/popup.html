@@ -45,33 +45,50 @@
       <p id="currentSession" class="details">No active session.</p>
     </div>
 
-    <div class="card small-card">
-      <p class="label">Mark Current Site As</p>
-
-      <div class="category-buttons">
-        <button id="productiveBtn">Productive</button>
-        <button id="mixedBtn">Mixed</button>
-        <button id="temptationBtn">Temptation</button>
-        <button id="neutralBtn">Neutral</button>
+    <div class="card small-card" id="intentCard">
+      <p class="label">Set Session Intent</p>
+      <div class="intent-controls">
+        <select id="intentPurpose" aria-label="Session purpose">
+          <option value="" selected>Select purpose…</option>
+          <option value="work_study">Study</option>
+          <option value="necessary">Necessary</option>
+          <option value="entertainment">Entertainment</option>
+          <option value="habitual_browsing">Browsing</option>
+          <option value="no_timer">No timer</option>
+        </select>
+        <input id="intentMinutes" type="number" min="1" max="480" placeholder="Minutes" aria-label="Intended minutes" />
+        <button id="setIntentBtn">Set Intent</button>
       </div>
-
-      <p id="categoryMessage" class="details">
-        You can personalize site categories.
-      </p>
+      <p id="intentStatus" class="details" style="margin-top:6px"></p>
     </div>
+
+    <details class="card small-card site-settings-details">
+      <summary class="label" style="cursor:pointer;user-select:none;outline:none;">Site settings <span style="font-weight:normal;opacity:0.7;">(Change site category)</span></summary>
+      <div style="margin-top:8px;">
+        <div class="category-buttons">
+          <button id="productiveBtn">Productive</button>
+          <button id="mixedBtn">Mixed</button>
+          <button id="temptationBtn">Temptation</button>
+          <button id="neutralBtn">Neutral</button>
+        </div>
+        <p id="categoryMessage" class="details" style="margin-top:6px;">
+          Personalize site category context.
+        </p>
+      </div>
+    </details>
 
     <div class="card">
       <p class="label">Status</p>
       <p id="usageStatus" class="value">Waiting...</p>
     </div>
 
-    <div class="card">
+    <div class="card" style="display:none">
       <p class="label">Friction</p>
       <p id="frictionType" class="value">Waiting...</p>
     </div>
 
     <div class="card">
-      <p class="label">Recommended Timer</p>
+      <p class="label">Remaining</p>
       <p id="timer" class="value">Waiting...</p>
     </div>
 
@@ -86,14 +103,15 @@
       <p id="actionStatus" class="details">No active timer.</p>
 
       <div class="action-buttons">
-        <button id="startTimerBtn">Start Timer</button>
-        <button id="breakBtn">Take Break</button>
-        <button id="stopTimerBtn">Stop</button>
+        <button id="extend5Btn">Add 5</button>
+        <button id="notFinishedBtn">Not finished</button>
+        <button id="finishBtn">Finish</button>
+        <button id="stopRemindersBtn">Stop reminders</button>
       </div>
     </div>
 
     <div class="card small-card">
-      <p class="label">Baseline / Recent / Overuse</p>
+      <p class="label">Used / Planned / Over</p>
       <p id="usageDetails" class="details">Waiting for analysis...</p>
     </div>
 

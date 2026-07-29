@@ -287,6 +287,9 @@ class StructuralTimerEngine:
     def get_structural_timer_summary(self, usage_history_minutes):
         if len(usage_history_minutes) == 0:
             return {
+                "mode": "NO_DATA",
+                "timer_active": False,
+                "should_intervene": False,
                 "error": "No usage history available"
             }
 
@@ -420,3 +423,5 @@ class StructuralTimerEngine:
                 "rather than relaxing it."
             )
         }
+
+    compute_timer = get_structural_timer_summary

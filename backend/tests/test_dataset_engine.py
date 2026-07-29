@@ -1,12 +1,15 @@
+from pathlib import Path
 from app.services.dataset_service import DatasetService
 from app.services.addiction_engine import AddictionEngine
 from app.services.dynamic_limit_engine import DynamicLimitEngine
 
 
-CSV_PATH = "../data/processed/cleaned_screen_time.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CSV_PATH = PROJECT_ROOT / "data" / "processed" / "cleaned_screen_time.csv"
 
 
 def test_dataset_loads_correctly():
+    assert CSV_PATH.exists(), f"Expected CSV dataset to exist at {CSV_PATH}"
     dataset_service = DatasetService(CSV_PATH)
     df = dataset_service.load_data()
 

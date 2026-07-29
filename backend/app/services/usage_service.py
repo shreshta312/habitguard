@@ -127,6 +127,10 @@ class UsageService:
         intervention_type_counts = Counter()
         usage_status_counts = Counter()
         friction_type_counts = Counter()
+        decision_snapshot_sources = {
+          "chrome_extension_jitai_check",
+         "chrome_extension_popup_analysis",
+       }
 
         for snapshot in snapshots:
             source = snapshot.get("source") or "unknown_source"
@@ -166,16 +170,18 @@ class UsageService:
                 usage_status = None
                 friction_type = None
 
-            if intervention_type:
-                intervention_type_counts[intervention_type] += 1
+            is_decision_snapshot = source in decision_snapshot_sources
 
-            if usage_status:
-                usage_status_counts[usage_status] += 1
+            if is_decision_snapshot and intervention_type:
+             intervention_type_counts[intervention_type] += 1
 
-            if friction_type:
-                friction_type_counts[friction_type] += 1
+            if is_decision_snapshot and usage_status:
+             usage_status_counts[usage_status] += 1
 
-        latest_date = latest.get("date")
+            if is_decision_snapshot and friction_type:
+             friction_type_counts[friction_type] += 1
+
+            latest_date = latest.get("date")
 
         if not latest_date and daily_usage_by_date:
             latest_date = sorted(daily_usage_by_date.keys())[-1]
