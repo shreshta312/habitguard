@@ -17,6 +17,16 @@ function debugLog(...args) {
   if (DEBUG) console.log(...args);
 }
 
+/**
+ * Generate a random provisional episode key.
+ * Used to group offline events into logical watching periods.
+ * This key is NEVER stored on the backend as a canonical ID.
+ */
+function generateProvisionalEpisodeKey() {
+  const rand = Math.random().toString(36).substr(2, 10);
+  return `pek_${Date.now()}_${rand}`;
+}
+
 function getTodayKey(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -331,24 +341,28 @@ async function _doReconcileActiveSession(reason) {
   if (generation === sessionSwitchGeneration) {
     const now2 = Date.now();
 
-    // Defect 6: if the stored session is already an OFFLINE_FALLBACK, check whether
-    // the gap since the fallback started exceeds the resumption threshold.
-    // If so, clear the session_id so queued events are not sent with an expired identity.
+    // Determine whether this fallback is a continuation of an existing fallback
+    // or a fresh one. The provisional_episode_key is rotated when:
+    //   (a) the domain changes, OR
+    //   (b) the gap since the fallback started exceeds SESSION_RESUME_GAP_MINUTES.
     let fallbackSessionId = null;
+    let provisionalEpisodeKey = generateProvisionalEpisodeKey(); // default: fresh key
+    let offlineFallbackStartedAt = now2;                         // default: now
+
     if (currentSession && currentSession.domain === activeDomain) {
       if (currentSession.canonicalState === "OFFLINE_FALLBACK") {
         const fallbackStartedAt = currentSession.offlineFallbackStartedAt || currentSession.startedAt || now2;
         const gapMs = now2 - fallbackStartedAt;
         const gapMins = gapMs / (1000 * 60);
         if (gapMins <= (SESSION_RESUME_GAP_MINUTES || 5)) {
-          fallbackSessionId = currentSession.session_id || null;
+          // Within gap threshold: continue same fallback, reuse same key and start time
+          fallbackSessionId      = currentSession.session_id || null;
+          provisionalEpisodeKey  = currentSession.provisionalEpisodeKey || generateProvisionalEpisodeKey();
+          offlineFallbackStartedAt = fallbackStartedAt;
         }
-        // gap exceeded: keep fallbackSessionId = null (no expired identity reuse)
-      } else {
-        // The existing session has a canonical server-confirmed id; do not reuse it
-        // while offline since we cannot verify it is still active on the backend.
-        // Leave fallbackSessionId = null.
+        // gap exceeded: new key + new startedAt (rotation)
       }
+      // existing canonical session while offline: do not reuse session_id; generate fresh key
     }
 
     newSession = {
@@ -362,12 +376,11 @@ async function _doReconcileActiveSession(reason) {
       intentPurpose: "unknown",
       intendedMinutes: null,
       canonicalState: "OFFLINE_FALLBACK",
-      offlineFallbackStartedAt: (currentSession && currentSession.canonicalState === "OFFLINE_FALLBACK" && currentSession.domain === activeDomain)
-        ? (currentSession.offlineFallbackStartedAt || currentSession.startedAt || now2)
-        : now2
+      offlineFallbackStartedAt: offlineFallbackStartedAt,
+      provisionalEpisodeKey: provisionalEpisodeKey
     };
     await chrome.storage.local.set({ currentSession: newSession, sessionHistory: updatedHistory });
-    console.warn("[HabitGuard] canonical session start failed; storing offline fallback");
+    console.warn(`[HabitGuard] canonical session start failed; offline fallback key=${provisionalEpisodeKey}`);
     return newSession;
   }
 
@@ -537,17 +550,23 @@ async function sendActivityBatch(sessionId, activities) {
 /**
  * Add an activity event to persistent offline queue in chrome.storage.local.
  * Preserves original client_event_id, event_timestamp_utc, focused_duration_ms,
- * domain, and user_id. session_id may be null for events recorded during a
- * long-gap offline period whose canonical session has expired.
+ * domain, user_id, and provisional_episode_key.
+ * session_id may be null for events recorded during a long-gap offline period.
  */
 async function enqueueOfflineActivity(sessionId, activity, domainOverride, userIdOverride) {
-  const { offlineQueue, offlineQueueDiagnostics } = await getStoredUsage();
+  const { offlineQueue, offlineQueueDiagnostics, currentSession } = await getStoredUsage();
   const newDiagnostics = { ...offlineQueueDiagnostics };
+
+  // Capture the current provisional episode key from storage so the flush
+  // can group events into the correct logical offline period.
+  const provisionalEpisodeKey = currentSession?.provisionalEpisodeKey || null;
 
   const item = {
     // Identity — may be null when recorded after a long-gap expiry.
     session_id: sessionId || null,
     provisional_session_id: sessionId || null,   // preserved for audit
+    // Grouping key — opaque, never sent to backend as a canonical ID.
+    provisional_episode_key: provisionalEpisodeKey,
     // Payload — never rewritten after enqueueing.
     client_event_id: activity.client_event_id,
     event_timestamp_utc: activity.event_timestamp_utc || new Date().toISOString(),
@@ -582,49 +601,61 @@ async function enqueueOfflineActivity(sessionId, activity, domainOverride, userI
  *
  * Algorithm:
  * A. Events with a canonical session_id are sent directly to that session.
- *    They are removed from the queue only after a successful canonical response.
- *    On failure they are retained with incremented retry_count.
+ *    Removed from queue only after successful HTTP 200.
+ *    Retained with incremented retry_count on failure.
  *
- * B. Events with session_id = null (recorded after a long-gap expiry) are
- *    never discarded. Instead, after all canonical flushes complete, we attempt
- *    to reconcile a fresh canonical session for each unique domain present in
- *    the null-session group. If reconciliation succeeds we bind those events
- *    to the fresh session_id and submit them. They are removed only on a
- *    successful submission. If reconciliation or submission fails the events
- *    remain in the queue untouched for the next retry cycle.
+ * B. Events with session_id = null are grouped by provisional_episode_key
+ *    (not by domain alone). Two YouTube periods separated by more than
+ *    SESSION_RESUME_GAP_MINUTES produce different keys and therefore
+ *    reconcile into separate canonical episodes.
  *
- * Invariants enforced:
+ *    For each provisional group:
+ *    1. Call POST /sessions/reconcile-offline with the group's events,
+ *       the earliest event timestamp as started_at_utc, and the group's domain.
+ *    2. The backend atomically creates a fresh episode + technical session with
+ *       started_at_utc = that earliest timestamp. FocusedUsageTracker never
+ *       rejects these events because the session pre-dates them.
+ *    3. On success: remove only the accepted event IDs from the queue.
+ *       Mark rejected events with a failure_reason and retain them.
+ *    4. On network/server failure: retain all events with retry_count++.
+ *    5. After reconciliation, update current provisional runtime state ONLY
+ *       when the reconciled key matches the currently active provisional key.
+ *       Historical keys must NOT become the current session.
+ *
+ * Invariants:
  *  - Original client_event_id and event_timestamp_utc are never rewritten.
- *  - Events are submitted to the session obtained AFTER reconnect, never to
- *    the expired session that was active when they were recorded.
- *  - Duplicate submission is prevented by the backend ON CONFLICT(client_event_id) DO NOTHING.
+ *  - Events are removed from queue ONLY after a canonical acceptance.
+ *  - A failed transaction leaves the queue entirely intact.
  */
 async function flushOfflineQueue() {
-  const { offlineQueue, offlineQueueDiagnostics } = await getStoredUsage();
+  const { offlineQueue, offlineQueueDiagnostics, currentSession } = await getStoredUsage();
   if (!offlineQueue || offlineQueue.length === 0) return;
 
   const newDiagnostics = { ...offlineQueueDiagnostics };
+  const activeProvisionalKey = currentSession?.provisionalEpisodeKey || null;
 
-  // Partition into canonical (has session_id) and provisional (null session_id) groups.
-  const bySession = {};
-  const provisionalByDomain = {};
+  // Partition: Group A (canonical session_id) and Group B (provisional key groups)
+  const bySession = {};              // session_id -> entries[]
+  const byProvisionalKey = {};       // provisional_episode_key -> entries[]
 
   for (const entry of offlineQueue) {
     const sid = entry.session_id;
     if (sid) {
-      // Group A: known canonical session.
       if (!bySession[sid]) bySession[sid] = [];
       bySession[sid].push(entry);
     } else {
-      // Group B: provisional — no canonical session yet.
-      // Retain all fields; group by domain for reconciliation.
-      const domain = entry.domain || "__unknown__";
-      if (!provisionalByDomain[domain]) provisionalByDomain[domain] = [];
-      provisionalByDomain[domain].push(entry);
+      // Group B: keyed by provisional_episode_key.
+      // Entries without a key get a synthetic fallback key per domain so they
+      // still reconcile rather than being retained forever.
+      const pek = entry.provisional_episode_key
+        || `pek_legacy_${entry.domain || "unknown"}`;
+      if (!byProvisionalKey[pek]) byProvisionalKey[pek] = [];
+      byProvisionalKey[pek].push(entry);
     }
   }
 
-  const failedQueue = [];
+  // Track which entries to keep after flushing
+  const failedEntries = [];
 
   // --- Group A: flush canonical-session events ---
   for (const [sessionId, entries] of Object.entries(bySession)) {
@@ -639,85 +670,131 @@ async function flushOfflineQueue() {
     if (ok) {
       newDiagnostics.totalFlushed = (newDiagnostics.totalFlushed || 0) + entries.length;
     } else {
-      // Retain failed items and increment retry count.
       entries.forEach((e) => { e.retry_count = (e.retry_count || 0) + 1; });
-      failedQueue.push(...entries);
+      failedEntries.push(...entries);
     }
   }
 
-  // --- Group B: reconcile provisional events with a fresh session ---
-  for (const [domain, entries] of Object.entries(provisionalByDomain)) {
-    if (domain === "__unknown__" || !domain) {
-      // Cannot reconcile without a domain — retain for next cycle.
+  // --- Group B: reconcile provisional groups via /sessions/reconcile-offline ---
+  for (const [pek, entries] of Object.entries(byProvisionalKey)) {
+    const domain = entries[0]?.domain;
+    if (!domain || domain === "__unknown__") {
+      // Cannot reconcile without a domain — retain.
       entries.forEach((e) => { e.retry_count = (e.retry_count || 0) + 1; });
-      failedQueue.push(...entries);
+      failedEntries.push(...entries);
       continue;
     }
 
-    let freshSessionId = null;
+    const userId = entries[0]?.user_id || "local_user";
+
+    // Compute the earliest event timestamp in this group (becomes session started_at_utc).
+    let earliestTs = null;
+    for (const e of entries) {
+      if (!earliestTs || e.event_timestamp_utc < earliestTs) {
+        earliestTs = e.event_timestamp_utc;
+      }
+    }
+    if (!earliestTs) {
+      entries.forEach((e) => { e.retry_count = (e.retry_count || 0) + 1; });
+      failedEntries.push(...entries);
+      continue;
+    }
+
+    const browserTimezone = (typeof Intl !== "undefined" && Intl.DateTimeFormat)
+      ? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC")
+      : "UTC";
+
+    const activities = entries.map((e) => ({
+      client_event_id:      e.client_event_id,
+      event_timestamp_utc:  e.event_timestamp_utc,   // NEVER rewritten
+      focused_duration_ms:  e.focused_duration_ms,
+      event_type:           e.event_type || "focus_heartbeat"
+    }));
+
+    let reconcileResult = null;
     try {
-      // Obtain a fresh canonical session for this domain after reconnect.
-      const userId = entries[0]?.user_id || "local_user";
       const apiBase = await getApiBaseUrl();
-      const browserTimezone = (typeof Intl !== "undefined" && Intl.DateTimeFormat)
-        ? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC")
-        : "UTC";
-      const sessionRes = await fetch(`${apiBase}/sessions/start`, {
+      const res = await fetch(`${apiBase}/sessions/reconcile-offline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: userId,
-          domain: domain,
-          purpose: "unknown",
-          intended_minutes: null,
-          timer_mode: "no_timer",
-          remember_today: true,
-          local_timezone: browserTimezone
+          user_id:                 userId,
+          domain:                  domain,
+          provisional_episode_key: pek,
+          started_at_utc:          earliestTs,
+          local_timezone:          browserTimezone,
+          activities:              activities
         })
       });
-      if (sessionRes.ok) {
-        const sessionData = await parseApiResponse(sessionRes);
-        freshSessionId = sessionData.session_id || null;
+      if (res.ok) {
+        reconcileResult = await parseApiResponse(res);
+      } else {
+        console.warn(`[HabitGuard] reconcile-offline HTTP ${res.status} for key=${pek}`);
       }
     } catch (err) {
-      console.warn("[HabitGuard] offline reconcile: session start failed for domain", domain, err);
+      console.warn(`[HabitGuard] reconcile-offline network error for key=${pek}:`, err);
     }
 
-    if (!freshSessionId) {
-      // Reconciliation failed — retain all events for next retry cycle.
+    if (!reconcileResult) {
+      // Network or server failure — retain entire group intact for next cycle.
       entries.forEach((e) => { e.retry_count = (e.retry_count || 0) + 1; });
-      failedQueue.push(...entries);
+      failedEntries.push(...entries);
       continue;
     }
 
-    // Bind events to the fresh session and submit (original timestamps preserved).
-    const activities = entries.map((e) => ({
-      event_type: e.event_type,
-      focused_duration_ms: e.focused_duration_ms,
-      client_event_id: e.client_event_id,
-      event_timestamp_utc: e.event_timestamp_utc   // never rewritten
-    }));
+    // Partition accepted vs rejected by the canonical response.
+    const acceptedSet = new Set(reconcileResult.accepted_event_ids || []);
+    const rejectedMap = {};
+    for (const r of (reconcileResult.rejected_events || [])) {
+      if (r.client_event_id) rejectedMap[r.client_event_id] = r.reason || "rejected";
+    }
 
-    const ok = await sendActivityBatch(freshSessionId, activities);
-    if (ok) {
-      newDiagnostics.totalFlushed = (newDiagnostics.totalFlushed || 0) + entries.length;
-    } else {
-      // Submission failed — update session_id to fresh one and retain.
-      entries.forEach((e) => {
-        e.session_id = freshSessionId;  // bind to fresh session for next retry
+    let groupFlushed = 0;
+    for (const e of entries) {
+      if (acceptedSet.has(e.client_event_id)) {
+        // Successfully accepted — remove from queue.
+        groupFlushed++;
+      } else if (rejectedMap[e.client_event_id]) {
+        // Permanently rejected — attach reason and retain for audit but do not retry.
+        e.failure_reason = rejectedMap[e.client_event_id];
         e.retry_count = (e.retry_count || 0) + 1;
-      });
-      failedQueue.push(...entries);
+        failedEntries.push(e);
+      } else {
+        // Unknown outcome (transient) — retain for retry.
+        e.retry_count = (e.retry_count || 0) + 1;
+        failedEntries.push(e);
+      }
+    }
+    newDiagnostics.totalFlushed = (newDiagnostics.totalFlushed || 0) + groupFlushed;
+
+    // Update current provisional runtime state ONLY when this reconciled key
+    // matches the CURRENTLY ACTIVE provisional episode. Historical keys must NOT
+    // overwrite the current session.
+    if (pek === activeProvisionalKey && reconcileResult.session_id) {
+      const stored = await chrome.storage.local.get(["currentSession"]);
+      const cs = stored.currentSession;
+      if (cs && cs.provisionalEpisodeKey === pek && cs.canonicalState === "OFFLINE_FALLBACK") {
+        await chrome.storage.local.set({
+          currentSession: {
+            ...cs,
+            session_id:    reconcileResult.session_id,
+            episode_id:    reconcileResult.episode_id,
+            canonicalState: "RECONCILED",
+            provisionalEpisodeKey: null   // key consumed
+          }
+        });
+        console.log(`[HabitGuard] offline reconcile: provisional state promoted to ${reconcileResult.session_id}`);
+      }
     }
   }
 
   await chrome.storage.local.set({
-    [OFFLINE_QUEUE_KEY]: failedQueue,
+    [OFFLINE_QUEUE_KEY]: failedEntries,
     offlineQueueDiagnostics: newDiagnostics
   });
 
-  if (failedQueue.length > 0) {
-    debugLog(`HabitGuard queue flush: ${failedQueue.length} events remaining`);
+  if (failedEntries.length > 0) {
+    debugLog(`HabitGuard queue flush: ${failedEntries.length} events remaining`);
   }
 }
 

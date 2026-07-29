@@ -303,7 +303,7 @@ def test_defect_1_apiBase_resolved_in_reconcile():
     content = bg_path.read_text(encoding="utf-8")
     assert "const apiBase = await getApiBaseUrl();" in content
     assert 'canonicalState: "OFFLINE_FALLBACK"' in content
-    assert 'console.warn("[HabitGuard] canonical session start failed; storing offline fallback");' in content
+    assert 'canonical session start failed;' in content
 
 def test_defect_3_multi_event_offline_batch_plan_allocation():
     from app.main import app

@@ -185,6 +185,25 @@ class BatchActivityRequest(BaseModel):
     activities: List[Dict[str, Any]]
     current_category: Optional[str] = None
 
+
+# Maximum age of an offline event eligible for reconciliation (configurable constant).
+_MAX_OFFLINE_AGE_HOURS: int = 24
+
+
+class OfflineReconcileRequest(BaseModel):
+    """Atomic offline reconciliation request.
+
+    The backend creates a fresh episode + technical session whose
+    started_at_utc equals the earliest validated event boundary, so that
+    FocusedUsageTracker never rejects events for predating the session.
+    """
+    user_id: str
+    domain: str
+    provisional_episode_key: str   # opaque client key, NOT stored as a canonical ID
+    started_at_utc: str            # earliest queued event timestamp for this group
+    local_timezone: Optional[str] = "UTC"
+    activities: List[Dict[str, Any]]  # each has client_event_id, event_timestamp_utc, focused_duration_ms
+
 class LegacyContextRequest(BaseModel):
     current_domain: Optional[str] = None
     current_category: Optional[str] = None
@@ -251,6 +270,178 @@ def get_session(session_id: str):
 def record_session_unfocused(session_id: str, timestamp_utc: Optional[str] = None):
     sessions_repo.set_unfocused_timestamp(session_id, timestamp_utc)
     return {"status": "success", "session_id": session_id}
+
+
+@app.post("/sessions/reconcile-offline")
+def reconcile_offline(req: OfflineReconcileRequest):
+    """
+    Atomic offline reconciliation endpoint.
+
+    Creates a fresh NO_PLAN intent episode and its technical session with
+    started_at_utc = earliest valid event boundary, inserts activities
+    idempotently (ON CONFLICT DO NOTHING), and returns canonical IDs plus
+    per-event accepted/rejected lists.
+
+    Normal /activity/batch timestamp validation is NOT weakened; this endpoint
+    achieves compliance by setting started_at_utc from the payload, which means
+    all submitted events are guaranteed to be >= session start.
+    """
+    import uuid as _uuid
+    from zoneinfo import ZoneInfo as _ZoneInfo
+
+    # ── 1. Validate domain ──────────────────────────────────────────────────
+    domain = (req.domain or "").strip().lower()
+    if not domain or "/" in domain or " " in domain:
+        raise HTTPException(status_code=422, detail="Invalid domain.")
+
+    # ── 2. Validate timezone ────────────────────────────────────────────────
+    local_tz = _validate_and_resolve_timezone(req.local_timezone or "UTC")
+
+    # ── 3. Parse and validate started_at_utc ───────────────────────────────
+    now_utc = datetime.now(timezone.utc)
+    try:
+        started_dt = datetime.fromisoformat(req.started_at_utc.replace("Z", "+00:00"))
+        if started_dt.tzinfo is None:
+            started_dt = started_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid started_at_utc format.")
+
+    # Reject future start times (with small clock-skew allowance)
+    if started_dt > now_utc + timedelta(minutes=5):
+        raise HTTPException(status_code=422, detail="started_at_utc is in the future.")
+
+    # Reject start times older than the configured maximum offline age
+    max_age_cutoff = now_utc - timedelta(hours=_MAX_OFFLINE_AGE_HOURS)
+    if started_dt < max_age_cutoff:
+        raise HTTPException(
+            status_code=422,
+            detail=f"started_at_utc exceeds maximum offline reconciliation age "
+                   f"({_MAX_OFFLINE_AGE_HOURS}h). Oldest allowed: {max_age_cutoff.isoformat()}"
+        )
+
+    started_at_iso = started_dt.isoformat()
+
+    # ── 4. Validate and classify individual activities ──────────────────────
+    MAX_DUR_MS = 3600000  # 1 hour max per event
+    accepted_events = []
+    rejected_events = []
+
+    seen_event_ids: set = set()
+    for act in (req.activities or []):
+        eid = act.get("client_event_id")
+        dur  = act.get("focused_duration_ms")
+        ts   = act.get("event_timestamp_utc")
+
+        # Missing required fields
+        if not eid or dur is None or not ts:
+            rejected_events.append({"client_event_id": eid, "reason": "missing_required_fields"})
+            continue
+
+        # Duplicate within this batch
+        if eid in seen_event_ids:
+            rejected_events.append({"client_event_id": eid, "reason": "duplicate_in_batch"})
+            continue
+        seen_event_ids.add(eid)
+
+        # Duration
+        try:
+            dur = float(dur)
+        except Exception:
+            rejected_events.append({"client_event_id": eid, "reason": "invalid_duration"})
+            continue
+        if dur <= 0 or dur > MAX_DUR_MS:
+            rejected_events.append({"client_event_id": eid, "reason": "duration_out_of_range"})
+            continue
+
+        # Timestamp
+        try:
+            evt_dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if evt_dt.tzinfo is None:
+                evt_dt = evt_dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            rejected_events.append({"client_event_id": eid, "reason": "invalid_timestamp"})
+            continue
+
+        if evt_dt > now_utc + timedelta(minutes=5):
+            rejected_events.append({"client_event_id": eid, "reason": "future_timestamp"})
+            continue
+
+        if evt_dt < max_age_cutoff:
+            rejected_events.append({"client_event_id": eid, "reason": "timestamp_too_old"})
+            continue
+
+        accepted_events.append({
+            "client_event_id": eid,
+            "focused_duration_ms": dur,
+            "event_timestamp_utc": ts,
+            "event_type": act.get("event_type", "focus_heartbeat"),
+        })
+
+    # ── 5. Atomic DB transaction ────────────────────────────────────────────
+    # All writes happen in a single connection under a single transaction.
+    new_episode_id  = f"ep_{_uuid.uuid4().hex[:12]}"
+    new_session_id  = f"sess_{_uuid.uuid4().hex[:12]}"
+    now_iso         = now_utc.isoformat()
+    accepted_ids    = [e["client_event_id"] for e in accepted_events]
+
+    conn = get_db_connection()
+    try:
+        with conn:  # single atomic transaction
+            # 5a. Create NO_PLAN intent episode with started_at_utc = offline start
+            conn.execute(
+                """INSERT INTO intent_episodes
+                   (episode_id, user_id, domain, purpose, intended_minutes,
+                    original_intended_minutes, extension_minutes, timer_mode,
+                    remember_today, started_at_utc, last_activity_at_utc,
+                    last_focused_at_utc, status, created_at_utc, updated_at_utc)
+                   VALUES (?,?,?,?,NULL,NULL,0.0,'no_timer',0,?,?,?,
+                           'reconciled',?,?)""",
+                (new_episode_id, req.user_id, domain, "unknown",
+                 started_at_iso, now_iso, now_iso, now_iso, now_iso)
+            )
+
+            # 5b. Create technical session with started_at_utc = offline start
+            #     FocusedUsageTracker checks event_ts >= session.started_at_utc - 5min
+            #     Because started_at_utc <= earliest event_ts, this always passes.
+            conn.execute(
+                """INSERT INTO technical_sessions
+                   (session_id, episode_id, user_id, domain, started_at_utc,
+                    status, local_timezone, created_at_utc, updated_at_utc)
+                   VALUES (?,?,?,?,?,'reconciled',?,?,?)""",
+                (new_session_id, new_episode_id, req.user_id, domain,
+                 started_at_iso, local_tz, now_iso, now_iso)
+            )
+
+            # 5c. Insert accepted activities idempotently
+            for act in accepted_events:
+                conn.execute(
+                    """INSERT INTO session_activities
+                       (client_event_id, session_id, user_id, domain,
+                        event_timestamp_utc, received_at_utc, event_type,
+                        focused_duration_ms)
+                       VALUES (?,?,?,?,?,?,?,?)
+                       ON CONFLICT(client_event_id) DO NOTHING""",
+                    (act["client_event_id"], new_session_id, req.user_id, domain,
+                     act["event_timestamp_utc"], now_iso,
+                     act["event_type"], act["focused_duration_ms"])
+                )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Reconciliation transaction failed: {exc}")
+    finally:
+        conn.close()
+
+    return {
+        "session_id":              new_session_id,
+        "episode_id":              new_episode_id,
+        "provisional_episode_key": req.provisional_episode_key,  # echoed back for client matching
+        "domain":                  domain,
+        "user_id":                 req.user_id,
+        "started_at_utc":          started_at_iso,
+        "accepted_event_ids":      accepted_ids,
+        "rejected_events":         rejected_events,
+        "total_accepted":          len(accepted_ids),
+        "total_rejected":          len(rejected_events),
+    }
 
 @app.post("/sessions/{session_id}/intent")
 @app.patch("/sessions/{session_id}/intent")
