@@ -2,8 +2,17 @@ from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
+
+def local_date_for_timezone(timezone_name: str) -> str:
+    try:
+        tz = ZoneInfo(timezone_name or "UTC")
+    except Exception:
+        tz = timezone.utc
+
+    return datetime.now(timezone.utc).astimezone(tz).date().isoformat()
 
 from app.db.migrations import run_migrations
 from app.core.config import SYSTEM_PARAMETERS, CONFIG_VERSION
@@ -13,6 +22,7 @@ from app.db.repositories.feedback import FeedbackRepository
 from app.db.repositories.optimization import OptimizationRepository
 from app.db.repositories.parameters import PersonalParametersRepository
 from app.db.repositories.rollups import DailyUsageRollupsRepository
+from app.db.connection import get_db_connection
 
 from app.services.focused_usage_tracker import FocusedUsageTracker
 from app.services.session_intent_service import SessionIntentService
@@ -253,22 +263,40 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
 
     # Phase 6: Record interval ONLY for newly inserted activities with accurate allocation
     inserted_acts = track_res.get("inserted_activities", [])
-    for act in inserted_acts:
-        duration_ms = act.get("focused_duration_ms")
-        ts_utc = act.get("event_timestamp_utc") or datetime.now(timezone.utc).isoformat()
-        if duration_ms and duration_ms > 0:
-            dur_mins = duration_ms / 60000.0
-            used_before = max(0.0, episode_focused_mins - dur_mins)
-            rollups_repo.record_activity_interval(
-                user_id=user_id,
-                domain=domain,
-                end_timestamp_utc=ts_utc,
-                duration_ms=duration_ms,
-                classification=purpose,
-                local_timezone=local_tz,
-                effective_planned_minutes=effective_planned_mins,
-                used_before_minutes=used_before
-            )
+    new_batch_minutes = sum(
+        float(act.get("focused_duration_ms", 0) or 0) / 60000.0
+        for act in inserted_acts
+    )
+    running_used_before = max(0.0, episode_focused_mins - new_batch_minutes)
+
+    ordered_acts = sorted(
+        inserted_acts,
+        key=lambda act: act.get("event_timestamp_utc") or ""
+    )
+
+    for act in ordered_acts:
+        duration_ms = float(act.get("focused_duration_ms", 0) or 0)
+        if duration_ms <= 0:
+            continue
+
+        duration_minutes = duration_ms / 60000.0
+        timestamp_utc = (
+            act.get("event_timestamp_utc")
+            or datetime.now(timezone.utc).isoformat()
+        )
+
+        rollups_repo.record_activity_interval(
+            user_id=user_id,
+            domain=domain,
+            end_timestamp_utc=timestamp_utc,
+            duration_ms=duration_ms,
+            classification=purpose,
+            local_timezone=local_tz,
+            effective_planned_minutes=effective_planned_mins,
+            used_before_minutes=running_used_before,
+        )
+
+        running_used_before += duration_minutes
 
     # Phase 2: Category validation
     valid_categories = {"productive", "mixed", "temptation", "neutral"}
@@ -276,7 +304,7 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
     current_category = raw_cat if raw_cat in valid_categories else "neutral"
 
     # Phase 7: Calculate actual distracting usage today across monitored domains
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_str = local_date_for_timezone(local_tz)
     today_rollups = rollups_repo.get_user_rollups(user_id, days=1)
     today_distracting = sum(
         max(0.0, float(r.get("focused_minutes", 0)) - float(r.get("necessary_minutes", 0)))
@@ -597,51 +625,191 @@ def get_debug_health():
     }
 
 @app.get("/dashboard/{user_id}/summary")
-def get_user_summary(user_id: str):
-    rollups = rollups_repo.get_user_rollups(user_id, days=14)
-    distinct_dates = sorted(list(set(r["local_date"] for r in rollups if r.get("local_date"))))
-    total_focused = sum(r.get("focused_minutes", 0) for r in rollups)
-    total_unplanned = sum(r.get("unplanned_minutes", 0) for r in rollups)
+def get_user_summary(user_id: str, local_tz: str = "UTC"):
+    today_str = local_date_for_timezone(local_tz)
+    today_rollups = rollups_repo.get_user_rollups(user_id, days=1)
+
+    active_usage_mins = sum(r.get("focused_minutes", 0.0) for r in today_rollups if r.get("local_date") == today_str)
+    unplanned_mins = sum(r.get("unplanned_minutes", 0.0) for r in today_rollups if r.get("local_date") == today_str)
+    unknown_mins = sum(r.get("unknown_minutes", 0.0) for r in today_rollups if r.get("local_date") == today_str)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT e.intended_minutes, e.original_intended_minutes, e.extension_minutes, e.timer_mode
+               FROM technical_sessions t
+               JOIN intent_episodes e ON t.episode_id = e.episode_id
+               WHERE t.user_id = ? AND e.status = 'active'
+               ORDER BY t.rowid DESC LIMIT 1""",
+            (user_id,)
+        )
+        row = cur.fetchone()
+        if row and row["timer_mode"] != "no_timer" and row["intended_minutes"] is not None:
+            orig_m = float(row["original_intended_minutes"] if row["original_intended_minutes"] is not None else row["intended_minutes"])
+            ext_m = float(row["extension_minutes"] or 0.0)
+            effective_planned_mins = orig_m + ext_m
+        else:
+            effective_planned_mins = None
+    finally:
+        conn.close()
+
+    if effective_planned_mins is not None and effective_planned_mins > 0:
+        planned_mins = min(active_usage_mins, effective_planned_mins)
+        remaining_mins = max(0.0, effective_planned_mins - active_usage_mins)
+        unplanned_mins = max(0.0, active_usage_mins - effective_planned_mins)
+    else:
+        planned_mins = sum(r.get("planned_minutes", 0.0) for r in today_rollups if r.get("local_date") == today_str)
+        effective_planned_mins = None
+        remaining_mins = None
+
+    hist_rollups = rollups_repo.get_user_rollups(user_id, days=14)
+    distinct_dates = sorted(list(set(r["local_date"] for r in hist_rollups if r.get("local_date"))))
 
     if len(distinct_dates) < 3:
-        eval_res = {
-            "status": "INSUFFICIENT_DATA",
-            "unplanned_usage_reduction": None,
-            "message": "Insufficient baseline evidence to evaluate progress."
-        }
+        status = "INSUFFICIENT_DATA"
+        weekly_progress = None
     else:
         mid = len(distinct_dates) // 2
         baseline_dates = set(distinct_dates[:mid])
         current_dates = set(distinct_dates[mid:])
-        baseline_unplanned = sum(r.get("unplanned_minutes", 0) for r in rollups if r.get("local_date") in baseline_dates)
-        current_unplanned = sum(r.get("unplanned_minutes", 0) for r in rollups if r.get("local_date") in current_dates)
+        baseline_unplanned = sum(r.get("unplanned_minutes", 0.0) for r in hist_rollups if r.get("local_date") in baseline_dates)
+        current_unplanned = sum(r.get("unplanned_minutes", 0.0) for r in hist_rollups if r.get("local_date") in current_dates)
         eval_res = outcome_evaluator.evaluate(
             baseline_unplanned_minutes=baseline_unplanned,
             current_unplanned_minutes=current_unplanned,
             sample_count=len(distinct_dates)
         )
+        status = eval_res["status"]
+        weekly_progress = eval_res.get("unplanned_usage_reduction")
 
     return {
         "user_id": user_id,
-        "active_usage_minutes": round(total_focused, 1),
-        "unplanned_overuse_minutes": round(total_unplanned, 1),
-        "weekly_progress": eval_res.get("unplanned_usage_reduction"),
-        "status": eval_res["status"]
+        "local_date": today_str,
+        "active_usage_minutes": round(active_usage_mins, 1),
+        "planned_minutes": round(planned_mins, 1),
+        "effective_planned_minutes": round(effective_planned_mins, 1) if effective_planned_mins is not None else None,
+        "remaining_minutes": round(remaining_mins, 1) if remaining_mins is not None else None,
+        "unplanned_overuse_minutes": round(unplanned_mins, 1),
+        "unknown_minutes": round(unknown_mins, 1),
+        "weekly_progress": weekly_progress,
+        "status": status
     }
 
 @app.get("/dashboard/{user_id}/history")
 def get_user_history(user_id: str, days: int = 7):
     rollups = rollups_repo.get_user_rollups(user_id, days=days)
-    return {"user_id": user_id, "history": rollups}
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for r in rollups:
+        d_str = r.get("local_date")
+        if not d_str:
+            continue
+        if d_str not in grouped:
+            grouped[d_str] = {
+                "date": d_str,
+                "focused_minutes": 0.0,
+                "planned_minutes": 0.0,
+                "unplanned_minutes": 0.0,
+                "unknown_minutes": 0.0
+            }
+        grouped[d_str]["focused_minutes"] += float(r.get("focused_minutes", 0.0))
+        grouped[d_str]["planned_minutes"] += float(r.get("planned_minutes", 0.0))
+        grouped[d_str]["unplanned_minutes"] += float(r.get("unplanned_minutes", 0.0))
+        grouped[d_str]["unknown_minutes"] += float(r.get("unknown_minutes", 0.0))
+
+    history_list = []
+    for d in sorted(grouped.keys(), reverse=True):
+        item = grouped[d]
+        f_min = round(item["focused_minutes"], 1)
+        p_min = round(min(f_min, item["planned_minutes"]), 1)
+        unp_min = round(item["unplanned_minutes"], 1)
+        unk_min = round(item["unknown_minutes"], 1)
+        history_list.append({
+            "date": d,
+            "focused_minutes": f_min,
+            "planned_minutes": p_min,
+            "unplanned_minutes": unp_min,
+            "unknown_minutes": unk_min
+        })
+
+    return {"user_id": user_id, "history": history_list}
 
 @app.get("/dashboard/{user_id}/platforms")
-def get_user_platforms(user_id: str):
-    rollups = rollups_repo.get_user_rollups(user_id, days=30)
+def get_user_platforms(user_id: str, local_tz: str = "UTC"):
+    today_str = local_date_for_timezone(local_tz)
+    rollups = rollups_repo.get_user_rollups(user_id, days=1)
     platforms: Dict[str, float] = {}
     for r in rollups:
-        d = r["domain"]
-        platforms[d] = round(platforms.get(d, 0.0) + r["focused_minutes"], 1)
-    return {"user_id": user_id, "platforms": platforms}
+        if r.get("local_date") == today_str:
+            d = r.get("domain")
+            if d:
+                platforms[d] = round(platforms.get(d, 0.0) + float(r.get("focused_minutes", 0.0)), 1)
+    return {"user_id": user_id, "local_date": today_str, "platforms": platforms}
+
+@app.get("/dashboard/{user_id}/current")
+def get_user_current_runtime_state(user_id: str):
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT t.session_id, t.episode_id, t.domain, e.purpose, e.intended_minutes
+               FROM technical_sessions t
+               LEFT JOIN intent_episodes e ON t.episode_id = e.episode_id
+               WHERE t.user_id = ?
+               ORDER BY t.rowid DESC LIMIT 1""",
+            (user_id,)
+        )
+        sess_row = cur.fetchone()
+        current_session = None
+        current_sid = None
+        current_epid = None
+
+        if sess_row:
+            sess_dict = dict(sess_row)
+            current_sid = sess_dict["session_id"]
+            current_epid = sess_dict["episode_id"]
+            ep_focused_mins = sessions_repo.get_episode_focused_minutes(current_epid) if current_epid else usage_tracker.calculate_focused_minutes(current_sid)
+            current_session = {
+                "session_id": current_sid,
+                "episode_id": current_epid,
+                "domain": sess_dict["domain"],
+                "purpose": sess_dict.get("purpose") or "unknown",
+                "episode_focused_minutes": ep_focused_mins
+            }
+
+        latest_intervention = None
+        if current_session:
+            cur.execute(
+                """SELECT session_id, user_id, optimized_target, recommended_remaining, solver_status, created_at_utc
+                   FROM optimization_runs
+                   WHERE user_id = ?
+                   ORDER BY rowid DESC LIMIT 1""",
+                (user_id,)
+            )
+            opt_row = cur.fetchone()
+            if opt_row:
+                opt_dict = dict(opt_row)
+                opt_sid = opt_dict.get("session_id")
+
+                opt_epid = None
+                if opt_sid:
+                    cur.execute("SELECT episode_id FROM technical_sessions WHERE session_id = ?", (opt_sid,))
+                    ep_row = cur.fetchone()
+                    if ep_row:
+                        opt_epid = ep_row[0]
+
+                matches_session = (opt_sid and current_sid and opt_sid == current_sid)
+                matches_episode = (opt_epid and current_epid and opt_epid == current_epid)
+
+                if matches_session or matches_episode:
+                    latest_intervention = opt_dict
+
+        return {
+            "current_session": current_session,
+            "latest_intervention": latest_intervention
+        }
+    finally:
+        conn.close()
 
 @app.get("/dashboard/{user_id}/goal")
 def get_user_goal_summary(user_id: str):

@@ -19,17 +19,19 @@ async function readJsonResponse(response) {
 }
 
 export async function fetchCanonicalUserDashboard(userId = "local_user") {
-  const [summaryRes, historyRes, platformsRes, goalRes] = await Promise.all([
+  const [summaryRes, historyRes, platformsRes, goalRes, currentRes] = await Promise.all([
     fetch(`${API_BASE_URL}/dashboard/${userId}/summary`),
     fetch(`${API_BASE_URL}/dashboard/${userId}/history?days=7`),
     fetch(`${API_BASE_URL}/dashboard/${userId}/platforms`),
-    fetch(`${API_BASE_URL}/dashboard/${userId}/goal`)
+    fetch(`${API_BASE_URL}/dashboard/${userId}/goal`),
+    fetch(`${API_BASE_URL}/dashboard/${userId}/current`).catch(() => null)
   ]);
 
   const summary = await readJsonResponse(summaryRes);
   const historyData = await readJsonResponse(historyRes);
   const platformsData = await readJsonResponse(platformsRes);
   const goal = await readJsonResponse(goalRes);
+  const currentData = currentRes ? await readJsonResponse(currentRes).catch(() => null) : null;
 
   const history = historyData.history || [];
   const platforms = platformsData.platforms || {};
@@ -53,6 +55,7 @@ export async function fetchCanonicalUserDashboard(userId = "local_user") {
       history,
       platforms,
       goal,
+      current: currentData,
       dashboard_ready: true
     },
     todayTotalMinutes: summary.active_usage_minutes || 0,
@@ -61,12 +64,8 @@ export async function fetchCanonicalUserDashboard(userId = "local_user") {
     sevenDayTrend,
     topDomainsToday,
     topDomainsAllTime: topDomainsToday,
-    currentSession: null,
-    latestIntervention: {
-      usage_status: summary.status || "STABLE",
-      overuse_gap_minutes: summary.unplanned_overuse_minutes || 0,
-      recommended_timer_minutes: null
-    },
+    currentSession: currentData?.current_session || null,
+    latestIntervention: currentData?.latest_intervention || null,
     goal
   };
 }

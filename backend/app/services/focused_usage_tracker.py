@@ -31,29 +31,41 @@ class FocusedUsageTracker:
         rejected_count = 0
 
         for act in activities:
+            client_event_id = act.get("client_event_id")
             duration_ms = act.get("focused_duration_ms")
-            if duration_ms is None or duration_ms <= 0 or duration_ms > MAX_EVENT_DURATION_MS:
+            ts_str = act.get("event_timestamp_utc")
+
+            if not client_event_id or duration_ms is None or not ts_str:
                 rejected_count += 1
                 continue
 
-            ts_str = act.get("event_timestamp_utc")
-            if ts_str:
-                try:
-                    event_ts = datetime.fromisoformat(str(ts_str))
-                    if event_ts.tzinfo is None:
-                        event_ts = event_ts.replace(tzinfo=timezone.utc)
+            try:
+                duration_ms = float(duration_ms)
+            except (ValueError, TypeError):
+                rejected_count += 1
+                continue
 
-                    # Reject if event predates session start beyond clock skew tolerance
-                    if session_start_utc and event_ts < (session_start_utc - CLOCK_SKEW_TOLERANCE):
-                        rejected_count += 1
-                        continue
+            if duration_ms <= 0 or duration_ms > MAX_EVENT_DURATION_MS:
+                rejected_count += 1
+                continue
 
-                    # Reject if event is implausibly in the future
-                    if event_ts > (now_utc + CLOCK_SKEW_TOLERANCE):
-                        rejected_count += 1
-                        continue
-                except (ValueError, TypeError):
-                    pass
+            try:
+                event_ts = datetime.fromisoformat(str(ts_str))
+                if event_ts.tzinfo is None:
+                    event_ts = event_ts.replace(tzinfo=timezone.utc)
+
+                # Reject if event predates session start beyond clock skew tolerance
+                if session_start_utc and event_ts < (session_start_utc - CLOCK_SKEW_TOLERANCE):
+                    rejected_count += 1
+                    continue
+
+                # Reject if event is implausibly in the future
+                if event_ts > (now_utc + CLOCK_SKEW_TOLERANCE):
+                    rejected_count += 1
+                    continue
+            except (ValueError, TypeError):
+                rejected_count += 1
+                continue
 
             valid_activities.append(act)
 

@@ -145,9 +145,16 @@ class DailyUsageRollupsRepository:
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT * FROM daily_usage_rollups WHERE user_id = ? ORDER BY local_date DESC LIMIT ?",
-                (user_id, days * 10)
+                "SELECT DISTINCT local_date FROM daily_usage_rollups WHERE user_id = ? ORDER BY local_date DESC LIMIT ?",
+                (user_id, days)
             )
+            date_rows = cur.fetchall()
+            if not date_rows:
+                return []
+            dates = [r[0] for r in date_rows]
+            placeholders = ",".join(["?"] * len(dates))
+            query = f"SELECT * FROM daily_usage_rollups WHERE user_id = ? AND local_date IN ({placeholders}) ORDER BY local_date DESC, domain ASC"
+            cur.execute(query, [user_id] + dates)
             return [dict(row) for row in cur.fetchall()]
         finally:
             conn.close()

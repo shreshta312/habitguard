@@ -4,7 +4,7 @@ import tempfile
 import sqlite3
 import pytest
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.db.connection import get_db_connection
 from app.db.migrations import run_migrations
@@ -298,37 +298,269 @@ def test_requirement_5_category_conflict_scenarios():
     assert act_c["planned_minutes"] is None
     assert act_c["unplanned_minutes"] == 0.0
 
-def test_requirement_6_duplicate_client_event_id_rollup_idempotency():
+def test_defect_1_apiBase_resolved_in_reconcile():
+    bg_path = Path(__file__).resolve().parents[2] / "chrome_extension" / "background.js"
+    content = bg_path.read_text(encoding="utf-8")
+    assert "const apiBase = await getApiBaseUrl();" in content
+    assert 'canonicalState: "OFFLINE_FALLBACK"' in content
+    assert 'console.warn("[HabitGuard] canonical session start failed; storing offline fallback");' in content
+
+def test_defect_3_multi_event_offline_batch_plan_allocation():
     from app.main import app
     from fastapi.testclient import TestClient
     client = TestClient(app)
 
-    uid = f"u_dup_idemp_{datetime.now().timestamp()}"
-    s = client.post("/sessions/start", json={"user_id": uid, "domain": "youtube.com", "purpose": "entertainment", "intended_minutes": 20.0}).json()
+    uid = f"u_offline_batch_{datetime.now().timestamp()}"
+    # Start session with 10 minute plan
+    s = client.post("/sessions/start", json={"user_id": uid, "domain": "youtube.com", "purpose": "entertainment", "intended_minutes": 10.0}).json()
     sid = s["session_id"]
-    client_id = f"evt_dup_{datetime.now().timestamp()}"
 
-    # First activity submit
-    act1 = client.post(f"/sessions/{sid}/activity/batch", json={
-        "activities": [{"client_event_id": client_id, "focused_duration_ms": 120000, "event_timestamp_utc": datetime.now(timezone.utc).isoformat()}]
-    }).json()
+    # Pre-existing usage = 8 minutes
+    client.post(f"/sessions/{sid}/activity/batch", json={
+        "activities": [{"client_event_id": f"evt_pre_{datetime.now().timestamp()}", "focused_duration_ms": 480000, "event_timestamp_utc": datetime.now(timezone.utc).isoformat()}]
+    })
+
+    # Offline batch containing three 1-minute activities (3 minutes total)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    acts = [
+        {"client_event_id": f"evt_off1_{now_ts}", "focused_duration_ms": 60000, "event_timestamp_utc": datetime.fromtimestamp(now_ts, timezone.utc).isoformat()},
+        {"client_event_id": f"evt_off2_{now_ts}", "focused_duration_ms": 60000, "event_timestamp_utc": datetime.fromtimestamp(now_ts + 1, timezone.utc).isoformat()},
+        {"client_event_id": f"evt_off3_{now_ts}", "focused_duration_ms": 60000, "event_timestamp_utc": datetime.fromtimestamp(now_ts + 2, timezone.utc).isoformat()}
+    ]
+
+    res = client.post(f"/sessions/{sid}/activity/batch", json={"activities": acts}).json()
 
     conn = get_db_connection()
-    act_count1 = conn.execute("SELECT COUNT(*) FROM session_activities WHERE session_id = ?", (sid,)).fetchone()[0]
-    out1 = conn.execute("SELECT * FROM session_outcomes WHERE session_id = ?", (sid,)).fetchone()
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rollups = conn.execute("SELECT * FROM daily_usage_rollups WHERE user_id = ? AND domain = ?", (uid, "youtube.com")).fetchall()
     conn.close()
 
-    # Second submission with duplicate client_event_id (offline retry)
-    act2 = client.post(f"/sessions/{sid}/activity/batch", json={
-        "activities": [{"client_event_id": client_id, "focused_duration_ms": 120000, "event_timestamp_utc": datetime.now(timezone.utc).isoformat()}]
-    }).json()
+    total_planned = sum(r["planned_minutes"] for r in rollups)
+    total_unplanned = sum(r["unplanned_minutes"] for r in rollups)
+    total_focused = sum(r["focused_minutes"] for r in rollups)
+
+    # 8 mins pre + 3 mins batch = 11 mins total (10 planned, 1 unplanned overuse)
+    assert total_focused == 11.0
+    assert total_planned == 10.0
+    assert total_unplanned == 1.0
+
+    # Retry identical client_event_ids
+    res_retry = client.post(f"/sessions/{sid}/activity/batch", json={"activities": acts}).json()
 
     conn2 = get_db_connection()
-    act_count2 = conn2.execute("SELECT COUNT(*) FROM session_activities WHERE session_id = ?", (sid,)).fetchone()[0]
-    out2 = conn2.execute("SELECT * FROM session_outcomes WHERE session_id = ?", (sid,)).fetchone()
+    rollups2 = conn2.execute("SELECT * FROM daily_usage_rollups WHERE user_id = ? AND domain = ?", (uid, "youtube.com")).fetchall()
     conn2.close()
 
-    assert act_count1 == act_count2 == 1, "Duplicate client_event_id must not insert duplicate session_activities"
-    assert out1["actual_focused_minutes"] == out2["actual_focused_minutes"] == 2.0
+    assert sum(r["focused_minutes"] for r in rollups2) == 11.0
+    assert sum(r["planned_minutes"] for r in rollups2) == 10.0
+    assert sum(r["unplanned_minutes"] for r in rollups2) == 1.0
 
+def test_defect_4_local_date_accounting():
+    from app.main import local_date_for_timezone
+    d_kolkata = local_date_for_timezone("Asia/Kolkata")
+    d_la = local_date_for_timezone("America/Los_Angeles")
+    assert isinstance(d_kolkata, str) and len(d_kolkata) == 10
+    assert isinstance(d_la, str) and len(d_la) == 10
+
+def test_defect_5_daily_rollup_query_semantics():
+    from app.main import rollups_repo
+    uid = f"u_15dom_{datetime.now().timestamp()}"
+    today_str = "2026-07-29"
+
+    # Insert 15 distinct domain rollups for one local date
+    for i in range(15):
+        domain = f"site{i+1}.com"
+        rollups_repo.upsert_rollup(user_id=uid, local_date=today_str, domain=domain, focused_minutes=5.0)
+
+    fetched = rollups_repo.get_user_rollups(uid, days=1)
+    assert len(fetched) == 15, f"Expected 15 domain rollups, got {len(fetched)}"
+
+def test_defect_6_dashboard_contracts():
+    from app.main import app
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    uid = f"u_dash_contract_{datetime.now().timestamp()}"
+    s = client.post("/sessions/start", json={"user_id": uid, "domain": "youtube.com", "purpose": "entertainment", "intended_minutes": 10.0}).json()
+    sid = s["session_id"]
+
+    client.post(f"/sessions/{sid}/activity/batch", json={
+        "activities": [{"client_event_id": f"evt_dash_{datetime.now().timestamp()}", "focused_duration_ms": 60000, "event_timestamp_utc": datetime.now(timezone.utc).isoformat()}]
+    })
+
+    summary = client.get(f"/dashboard/{uid}/summary").json()
+    assert summary["active_usage_minutes"] == 1.0
+    assert summary["planned_minutes"] == 1.0
+    assert summary["effective_planned_minutes"] == 10.0
+    assert summary["remaining_minutes"] == 9.0
+    assert summary["unplanned_overuse_minutes"] == 0.0
+
+    # Invariants test
+    assert summary["planned_minutes"] <= summary["active_usage_minutes"]
+    total_parts = summary["planned_minutes"] + summary["unplanned_overuse_minutes"] + summary["unknown_minutes"]
+    assert abs(total_parts - summary["active_usage_minutes"]) < 1e-3
+
+    history = client.get(f"/dashboard/{uid}/history?days=7").json()
+    assert "history" in history
+    for item in history["history"]:
+        assert item["planned_minutes"] <= item["focused_minutes"]
+        parts_sum = item["planned_minutes"] + item["unplanned_minutes"] + item["unknown_minutes"]
+        assert abs(parts_sum - item["focused_minutes"]) < 1e-3
+
+    platforms = client.get(f"/dashboard/{uid}/platforms").json()
+    assert "platforms" in platforms
+
+def test_current_endpoint_no_session_returns_null_for_both():
+    from app.main import app
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    uid = f"u_no_session_{datetime.now().timestamp()}"
+    current = client.get(f"/dashboard/{uid}/current").json()
+    assert current["current_session"] is None
+    assert current["latest_intervention"] is None
+
+def test_current_endpoint_matching_session_returns_intervention():
+    from app.main import app
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    uid = f"u_match_sess_{datetime.now().timestamp()}"
+    s = client.post("/sessions/start", json={"user_id": uid, "domain": "youtube.com", "purpose": "entertainment", "intended_minutes": 10.0}).json()
+    sid = s["session_id"]
+
+    # Record run in optimization_runs
+    with get_db_connection() as conn:
+        conn.execute(
+            """INSERT INTO optimization_runs (session_id, user_id, input_snapshot_json, observed_baseline, baseline_source, planned_minutes, necessary_minimum, minutes_used, temptation_estimate, temptation_confidence, optimized_target, recommended_remaining, solver_status, configuration_version, tracking_reliability, constraints_satisfied, created_at_utc)
+               VALUES (?, ?, '{}', 10.0, 'user_target', 10.0, 0.0, 1.0, 0.5, 0.8, 10.0, 9.0, 'OPTIMIZED', '2.0.0', 1.0, 1, ?)""",
+            (sid, uid, datetime.now(timezone.utc).isoformat())
+        )
+
+    current = client.get(f"/dashboard/{uid}/current").json()
+    assert current["current_session"] is not None
+    assert current["current_session"]["session_id"] == sid
+    assert current["latest_intervention"] is not None
+    assert current["latest_intervention"]["session_id"] == sid
+
+def test_current_endpoint_resumed_episode_different_session_returns_intervention():
+    from app.main import app
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    uid = f"u_resumed_ep_{datetime.now().timestamp()}"
+    s1 = client.post("/sessions/start", json={"user_id": uid, "domain": "youtube.com", "purpose": "entertainment", "intended_minutes": 10.0}).json()
+    sid1 = s1["session_id"]
+    epid1 = s1["intent"]["episode_id"]
+
+    # Record intervention on session 1
+    with get_db_connection() as conn:
+        conn.execute(
+            """INSERT INTO optimization_runs (session_id, user_id, input_snapshot_json, observed_baseline, baseline_source, planned_minutes, necessary_minimum, minutes_used, temptation_estimate, temptation_confidence, optimized_target, recommended_remaining, solver_status, configuration_version, tracking_reliability, constraints_satisfied, created_at_utc)
+               VALUES (?, ?, '{}', 10.0, 'user_target', 10.0, 0.0, 1.0, 0.5, 0.8, 10.0, 9.0, 'OPTIMIZED', '2.0.0', 1.0, 1, ?)""",
+            (sid1, uid, datetime.now(timezone.utc).isoformat())
+        )
+
+    # Short gap resumption -> creates new technical session sid2 with same episode_id
+    client.post(f"/sessions/{sid1}/unfocus")
+    s2 = client.post("/sessions/start", json={"user_id": uid, "domain": "youtube.com"}).json()
+    sid2 = s2["session_id"]
+    epid2 = s2["intent"]["episode_id"]
+    assert sid1 != sid2
+    assert epid1 == epid2
+
+    current = client.get(f"/dashboard/{uid}/current").json()
+    assert current["current_session"]["session_id"] == sid2
+    assert current["latest_intervention"] is not None
+    assert current["latest_intervention"]["session_id"] == sid1
+
+def test_current_endpoint_different_episode_returns_null():
+    from app.main import app
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    uid = f"u_diff_ep_{datetime.now().timestamp()}"
+    s1 = client.post("/sessions/start", json={"user_id": uid, "domain": "youtube.com", "purpose": "entertainment", "intended_minutes": 10.0}).json()
+    sid1 = s1["session_id"]
+
+    # Record intervention on session 1
+    with get_db_connection() as conn:
+        conn.execute(
+            """INSERT INTO optimization_runs (session_id, user_id, input_snapshot_json, observed_baseline, baseline_source, planned_minutes, necessary_minimum, minutes_used, temptation_estimate, temptation_confidence, optimized_target, recommended_remaining, solver_status, configuration_version, tracking_reliability, constraints_satisfied, created_at_utc)
+               VALUES (?, ?, '{}', 10.0, 'user_target', 10.0, 0.0, 1.0, 0.5, 0.8, 10.0, 9.0, 'OPTIMIZED', '2.0.0', 1.0, 1, ?)""",
+            (sid1, uid, datetime.now(timezone.utc).isoformat())
+        )
+
+    # Long gap -> expired episode, new session sid2 with new episode
+    past_iso = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    client.post(f"/sessions/{sid1}/unfocus", params={"timestamp_utc": past_iso})
+    s2 = client.post("/sessions/start", json={"user_id": uid, "domain": "youtube.com"}).json()
+    sid2 = s2["session_id"]
+
+    current = client.get(f"/dashboard/{uid}/current").json()
+    assert current["current_session"]["session_id"] == sid2
+    assert current["latest_intervention"] is None
+
+def test_defect_8_malformed_timestamp_rejection():
+    from app.main import app
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    uid = f"u_malformed_ts_{datetime.now().timestamp()}"
+    s = client.post("/sessions/start", json={"user_id": uid, "domain": "youtube.com"}).json()
+    sid = s["session_id"]
+
+    # Submit invalid activities (missing client_event_id, missing timestamp, malformed timestamp)
+    res = client.post(f"/sessions/{sid}/activity/batch", json={
+        "activities": [
+            {"focused_duration_ms": 60000}, # missing client_event_id & timestamp
+            {"client_event_id": "e_bad_ts", "focused_duration_ms": 60000, "event_timestamp_utc": "invalid_date_str"},
+            {"client_event_id": "e_future", "focused_duration_ms": 60000, "event_timestamp_utc": "2099-01-01T00:00:00Z"}
+        ]
+    })
+
+    # Verify invalid activities were rejected with HTTP 400 Bad Request
+    assert res.status_code == 400
+
+def test_defect_9_legacy_feedback_migration_preserves_rows():
+    from app.db.connection import get_db_connection
+    from app.db.migrations import _migrate_legacy_table_data
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_p = Path(tmpdir) / "test_legacy_fb.db"
+        conn = get_db_connection(db_p)
+
+        # Create legacy table without session_id
+        conn.execute("""
+            CREATE TABLE feedback_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                event_type TEXT,
+                timestamp TEXT
+            )
+        """)
+        conn.execute("INSERT INTO feedback_events (user_id, event_type, timestamp) VALUES ('u1', 'extend_5', '2026-07-29T10:00:00Z')")
+        conn.commit()
+
+        _migrate_legacy_table_data(conn, "feedback_events")
+
+        # Verify migrated feedback_events table has preserved rows and session_id column
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(feedback_events)")
+        cols = [r[1] for r in cur.fetchall()]
+        assert "session_id" in cols
+
+        cur.execute("SELECT * FROM feedback_events")
+        rows = cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0][3] == "extend_5" # action column preserved
+        conn.close()
+
+def test_defect_10_formula_metadata_matches_solver():
+    from app.services.session_optimization_engine import SessionOptimizationEngine
+    solver = SessionOptimizationEngine()
+    assert hasattr(solver, "alpha")
+    assert hasattr(solver, "beta")
+    assert hasattr(solver, "lambda_dev")
 

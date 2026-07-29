@@ -44,7 +44,12 @@ def test_user_daily_summary():
 
 
 def test_missing_user_returns_error():
+    if not CSV_PATH.exists():
+        pytest.skip(f"Optional CSV dataset absent at {CSV_PATH}")
     service = HabitGuardService(CSV_PATH)
+    df = service.dataset_service.load_data()
+    if df.empty:
+        pytest.skip("CSV dataset is empty")
 
     summary = service.get_user_daily_summary(user_id=999999999)
 
@@ -53,8 +58,12 @@ def test_missing_user_returns_error():
 
 
 def test_user_app_summary():
+    if not CSV_PATH.exists():
+        pytest.skip(f"Optional CSV dataset absent at {CSV_PATH}")
     dataset_service = DatasetService(CSV_PATH)
     df = dataset_service.load_data()
+    if df.empty:
+        pytest.skip("CSV dataset is empty")
 
     sample_user = int(df["user_id"].iloc[0])
     sample_app = dataset_service.get_user_apps(df, str(sample_user))[0]

@@ -156,16 +156,28 @@ function isExtensionTransientUrl(url) {
 }
 
 async function notifySessionUnfocused(sessionId) {
-  if (!sessionId || sessionId === lastUnfocusedSessionId) return;
+  if (!sessionId || sessionId === lastUnfocusedSessionId) return false;
+
   lastUnfocusedSessionId = sessionId;
+
   try {
     const apiBase = await getApiBaseUrl();
-    await fetch(`${apiBase}/sessions/${sessionId}/unfocus`, {
+    const response = await fetch(`${apiBase}/sessions/${sessionId}/unfocus`, {
       method: "POST",
       headers: { "Content-Type": "application/json" }
-    }).catch((err) => console.warn("[HabitGuard] unfocus notification failed:", err));
-  } catch (err) {
-    console.warn("[HabitGuard] notifySessionUnfocused error:", err);
+    });
+
+    if (!response.ok) {
+      lastUnfocusedSessionId = null;
+      console.warn(`[HabitGuard] unfocus rejected: ${response.status}`);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    lastUnfocusedSessionId = null;
+    console.warn("[HabitGuard] unfocus notification failed:", error);
+    return false;
   }
 }
 
@@ -221,6 +233,7 @@ async function _doReconcileActiveSession(reason) {
 
   const activeDomain = getDomain(rawUrl);
   console.log(`[HabitGuard] active domain: ${activeDomain}`);
+  lastUnfocusedSessionId = null;
 
   // Rule C: DIFFERENT_TRACKABLE_DOMAIN (session switch)
   if (currentSession && currentSession.domain && currentSession.domain !== activeDomain) {
@@ -257,6 +270,7 @@ async function _doReconcileActiveSession(reason) {
       ? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC")
       : "UTC";
 
+    const apiBase = await getApiBaseUrl();
     const response = await fetch(`${apiBase}/sessions/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -323,10 +337,11 @@ async function _doReconcileActiveSession(reason) {
       lastUpdatedAt: now,
       sessionMinutes: (currentSession && currentSession.domain === activeDomain) ? currentSession.sessionMinutes : 0,
       intentPurpose: "unknown",
-      intendedMinutes: null
+      intendedMinutes: null,
+      canonicalState: "OFFLINE_FALLBACK"
     };
     await chrome.storage.local.set({ currentSession: newSession, sessionHistory: updatedHistory });
-    console.log(`[HabitGuard] session committed`);
+    console.warn("[HabitGuard] canonical session start failed; storing offline fallback");
     return newSession;
   }
 
@@ -672,6 +687,20 @@ async function consumeCanonicalDecision(batchData, source = "activity_heartbeat"
     return;
   }
 
+async function updateLatestDeliveryState(decisionId, updates) {
+  const stored = await chrome.storage.local.get(["latestIntervention"]);
+  const latest = stored.latestIntervention;
+
+  if (!latest || latest.decision_id !== decisionId) return;
+
+  await chrome.storage.local.set({
+    latestIntervention: {
+      ...latest,
+      ...updates
+    }
+  });
+}
+
   // 5. Handle Native Notification Delivery if independently eligible
   if (batchData.should_notify) {
     const lastNotifAt = stored.lastNotificationAt || 0;
@@ -679,6 +708,10 @@ async function consumeCanonicalDecision(batchData, source = "activity_heartbeat"
     const notifElapsedMins = (Date.now() - lastNotifAt) / (1000 * 60);
 
     if (notifElapsedMins < notifCooldownMins) {
+      await updateLatestDeliveryState(decisionId, {
+        delivery_status: "SUPPRESSED",
+        failure_reason: "notification_cooldown_active"
+      });
       await recordDeliveryTrace({
         decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
         user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
@@ -710,6 +743,10 @@ async function consumeCanonicalDecision(batchData, source = "activity_heartbeat"
             message: msgText, priority: 2
           }, async (createdId) => {
             if (chrome.runtime.lastError) {
+              await updateLatestDeliveryState(decisionId, {
+                delivery_status: "PERMISSION_DENIED",
+                failure_reason: chrome.runtime.lastError.message
+              });
               await recordDeliveryTrace({
                 decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
                 user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
@@ -719,6 +756,11 @@ async function consumeCanonicalDecision(batchData, source = "activity_heartbeat"
               });
             } else {
               await chrome.storage.local.set({ lastNotificationAt: Date.now() });
+              await updateLatestDeliveryState(decisionId, {
+                delivery_status: "API_ACCEPTED",
+                chrome_notification_id: createdId || notifId,
+                failure_reason: null
+              });
               await recordDeliveryTrace({
                 decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
                 user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
@@ -729,6 +771,10 @@ async function consumeCanonicalDecision(batchData, source = "activity_heartbeat"
             }
           });
         } catch (err) {
+          await updateLatestDeliveryState(decisionId, {
+            delivery_status: "FAILED",
+            failure_reason: String(err)
+          });
           await recordDeliveryTrace({
             decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
             user_id: "local_user", domain, channel: "notification", requested_channel: "notification",

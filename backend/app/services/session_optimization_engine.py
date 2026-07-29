@@ -14,8 +14,9 @@ class SessionOptimizationEngine:
         self.alpha = cfg["alpha_usage_cost"]
         self.beta = cfg["beta_temptation_cost"]
         self.lambda_dev = cfg["lambda_plan_deviation"]
-        self.kappa_burden = cfg["kappa_intervention_burden"]
-        self.gamma_goal = cfg["gamma_reduction_goal"]
+        # Reference parameters from theoretical formulation (handled via binding constraints and policy)
+        self.kappa_burden_reference = cfg["kappa_intervention_burden"]
+        self.gamma_goal_reference = cfg["gamma_reduction_goal"]
         self.session_scale = cfg["session_scale_minutes"]
         self.grid_step = cfg["grid_search_step_minutes"]
         self.safe_max_default = cfg["safe_session_maximum_minutes"]

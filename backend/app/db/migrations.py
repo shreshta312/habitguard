@@ -123,31 +123,41 @@ def _migrate_legacy_view_data(conn: sqlite3.Connection, view_name: str):
 def _migrate_legacy_table_data(conn: sqlite3.Connection, table_name: str):
     cur = conn.cursor()
     if table_name == "feedback_events":
-        cur.execute("SELECT * FROM feedback_events")
-        rows = cur.fetchall()
         cur.execute("PRAGMA table_info(feedback_events)")
         cols = [r[1] for r in cur.fetchall()]
-        if rows and "action" in cols:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS feedback_events_canonical (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    task_completion INTEGER,
-                    time_sufficient INTEGER,
-                    created_at_utc TEXT NOT NULL
-                )
-            """)
-            for r in rows:
-                row_dict = dict(zip(cols, r))
-                conn.execute(
-                    """INSERT INTO feedback_events_canonical
-                       (session_id, user_id, action, created_at_utc)
-                       VALUES (?, ?, ?, ?)""",
-                    (row_dict.get("session_id", "legacy_session"), row_dict.get("user_id", "local_user"), row_dict.get("action", "unknown"), row_dict.get("created_at_utc", datetime.now(timezone.utc).isoformat()))
-                )
-            conn.commit()
+        if "session_id" not in cols:
+            cur.execute("SELECT * FROM feedback_events")
+            rows = cur.fetchall()
+
+            with conn:
+                conn.execute("""
+                    CREATE TABLE feedback_events_migrated (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        task_completion INTEGER,
+                        time_sufficient INTEGER,
+                        created_at_utc TEXT NOT NULL
+                    )
+                """)
+                if rows:
+                    for r in rows:
+                        row_dict = dict(zip(cols, r))
+                        sid = row_dict.get("session_id") or "legacy_session"
+                        uid = row_dict.get("user_id") or "local_user"
+                        act = row_dict.get("action") or row_dict.get("event_type") or "unknown"
+                        tc = row_dict.get("task_completion")
+                        ts_suff = row_dict.get("time_sufficient")
+                        ts = row_dict.get("created_at_utc") or row_dict.get("timestamp") or datetime.now(timezone.utc).isoformat()
+                        conn.execute(
+                            """INSERT INTO feedback_events_migrated
+                               (session_id, user_id, action, task_completion, time_sufficient, created_at_utc)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (sid, uid, act, tc, ts_suff, ts)
+                        )
+                conn.execute("DROP TABLE feedback_events")
+                conn.execute("ALTER TABLE feedback_events_migrated RENAME TO feedback_events")
 
 def _ensure_columns(cur: sqlite3.Cursor):
     # Check and migrate intent_episodes columns idempotently
