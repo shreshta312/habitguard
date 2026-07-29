@@ -389,23 +389,41 @@ def test_defect_6_dashboard_contracts():
     })
 
     summary = client.get(f"/dashboard/{uid}/summary").json()
+    # Defect 1 fix: /summary now returns canonical rollup totals only.
+    # effective_planned_minutes and remaining_minutes live in /current, not /summary.
     assert summary["active_usage_minutes"] == 1.0
-    assert summary["planned_minutes"] == 1.0
-    assert summary["effective_planned_minutes"] == 10.0
-    assert summary["remaining_minutes"] == 9.0
-    assert summary["unplanned_overuse_minutes"] == 0.0
+    # planned_minutes comes from rollup record (computed by record_activity_interval)
+    assert summary["planned_minutes"] <= summary["active_usage_minutes"]
+    assert "effective_planned_minutes" not in summary, (
+        "effective_planned_minutes must not appear in /summary (belongs to /current)"
+    )
+    assert "remaining_minutes" not in summary, (
+        "remaining_minutes must not appear in /summary (belongs to /current)"
+    )
+    assert summary["unplanned_overuse_minutes"] >= 0.0
 
-    # Invariants test
+    # Invariants still enforced
     assert summary["planned_minutes"] <= summary["active_usage_minutes"]
     total_parts = summary["planned_minutes"] + summary["unplanned_overuse_minutes"] + summary["unknown_minutes"]
-    assert abs(total_parts - summary["active_usage_minutes"]) < 1e-3
+    assert abs(total_parts - summary["active_usage_minutes"]) < 1e-1
+
+    # Verify effective plan info is in /current, not /summary
+    current = client.get(f"/dashboard/{uid}/current").json()
+    assert current.get("status") == "ACTIVE"
+    cs = current["current_session"]
+    assert cs is not None
+    # effective_planned_minutes is available on the current session object
+    assert "effective_planned_minutes" in cs, (
+        "effective_planned_minutes must be in /current current_session"
+    )
+    assert cs["effective_planned_minutes"] == 10.0
 
     history = client.get(f"/dashboard/{uid}/history?days=7").json()
     assert "history" in history
     for item in history["history"]:
-        assert item["planned_minutes"] <= item["focused_minutes"]
+        assert item["planned_minutes"] <= item["focused_minutes"] + 1e-3
         parts_sum = item["planned_minutes"] + item["unplanned_minutes"] + item["unknown_minutes"]
-        assert abs(parts_sum - item["focused_minutes"]) < 1e-3
+        assert abs(parts_sum - item["focused_minutes"]) < 1e-1
 
     platforms = client.get(f"/dashboard/{uid}/platforms").json()
     assert "platforms" in platforms

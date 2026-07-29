@@ -11,8 +11,46 @@ def local_date_for_timezone(timezone_name: str) -> str:
         tz = ZoneInfo(timezone_name or "UTC")
     except Exception:
         tz = timezone.utc
-
     return datetime.now(timezone.utc).astimezone(tz).date().isoformat()
+
+
+def _validate_and_resolve_timezone(local_tz: str) -> str:
+    """Validate an IANA timezone string. Returns the string unchanged if valid,
+    falls back to UTC if invalid or absent."""
+    if not local_tz:
+        return "UTC"
+    try:
+        ZoneInfo(local_tz)
+        return local_tz
+    except Exception:
+        return "UTC"
+
+
+def _resolve_timezone_for_user(local_tz: str, user_id: str) -> str:
+    """Validate timezone; if invalid, fall back to latest technical_session.local_timezone,
+    then UTC as final fallback. Never trusts the string directly in SQL."""
+    validated = _validate_and_resolve_timezone(local_tz)
+    if validated != "UTC" or (local_tz and local_tz.upper() == "UTC"):
+        return validated
+    # Attempt fallback from latest session timezone
+    try:
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT local_timezone FROM technical_sessions WHERE user_id = ? "
+                "AND local_timezone IS NOT NULL AND local_timezone != '' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (user_id,)
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return _validate_and_resolve_timezone(row[0])
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return "UTC"
 
 from app.db.migrations import run_migrations
 from app.core.config import SYSTEM_PARAMETERS, CONFIG_VERSION
@@ -626,43 +664,19 @@ def get_debug_health():
 
 @app.get("/dashboard/{user_id}/summary")
 def get_user_summary(user_id: str, local_tz: str = "UTC"):
-    today_str = local_date_for_timezone(local_tz)
+    # Defect 2: validate and resolve timezone before any date calculation
+    resolved_tz = _resolve_timezone_for_user(local_tz, user_id)
+    today_str = local_date_for_timezone(resolved_tz)
     today_rollups = rollups_repo.get_user_rollups(user_id, days=1)
 
+    # Defect 1: sum canonical rollup fields per domain — do NOT apply current episode's
+    # plan to aggregate daily totals across all domains.
     active_usage_mins = sum(r.get("focused_minutes", 0.0) for r in today_rollups if r.get("local_date") == today_str)
+    planned_mins = sum(r.get("planned_minutes", 0.0) for r in today_rollups if r.get("local_date") == today_str)
     unplanned_mins = sum(r.get("unplanned_minutes", 0.0) for r in today_rollups if r.get("local_date") == today_str)
     unknown_mins = sum(r.get("unknown_minutes", 0.0) for r in today_rollups if r.get("local_date") == today_str)
 
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """SELECT e.intended_minutes, e.original_intended_minutes, e.extension_minutes, e.timer_mode
-               FROM technical_sessions t
-               JOIN intent_episodes e ON t.episode_id = e.episode_id
-               WHERE t.user_id = ? AND e.status = 'active'
-               ORDER BY t.rowid DESC LIMIT 1""",
-            (user_id,)
-        )
-        row = cur.fetchone()
-        if row and row["timer_mode"] != "no_timer" and row["intended_minutes"] is not None:
-            orig_m = float(row["original_intended_minutes"] if row["original_intended_minutes"] is not None else row["intended_minutes"])
-            ext_m = float(row["extension_minutes"] or 0.0)
-            effective_planned_mins = orig_m + ext_m
-        else:
-            effective_planned_mins = None
-    finally:
-        conn.close()
-
-    if effective_planned_mins is not None and effective_planned_mins > 0:
-        planned_mins = min(active_usage_mins, effective_planned_mins)
-        remaining_mins = max(0.0, effective_planned_mins - active_usage_mins)
-        unplanned_mins = max(0.0, active_usage_mins - effective_planned_mins)
-    else:
-        planned_mins = sum(r.get("planned_minutes", 0.0) for r in today_rollups if r.get("local_date") == today_str)
-        effective_planned_mins = None
-        remaining_mins = None
-
+    # Trend evaluation using historical rollups
     hist_rollups = rollups_repo.get_user_rollups(user_id, days=14)
     distinct_dates = sorted(list(set(r["local_date"] for r in hist_rollups if r.get("local_date"))))
 
@@ -688,8 +702,6 @@ def get_user_summary(user_id: str, local_tz: str = "UTC"):
         "local_date": today_str,
         "active_usage_minutes": round(active_usage_mins, 1),
         "planned_minutes": round(planned_mins, 1),
-        "effective_planned_minutes": round(effective_planned_mins, 1) if effective_planned_mins is not None else None,
-        "remaining_minutes": round(remaining_mins, 1) if remaining_mins is not None else None,
         "unplanned_overuse_minutes": round(unplanned_mins, 1),
         "unknown_minutes": round(unknown_mins, 1),
         "weekly_progress": weekly_progress,
@@ -697,7 +709,9 @@ def get_user_summary(user_id: str, local_tz: str = "UTC"):
     }
 
 @app.get("/dashboard/{user_id}/history")
-def get_user_history(user_id: str, days: int = 7):
+def get_user_history(user_id: str, days: int = 7, local_tz: str = "UTC"):
+    # Defect 2: validate timezone so history buckets use local date
+    _resolve_timezone_for_user(local_tz, user_id)  # validates; rollup dates already stored as local
     rollups = rollups_repo.get_user_rollups(user_id, days=days)
     grouped: Dict[str, Dict[str, Any]] = {}
     for r in rollups:
@@ -721,7 +735,7 @@ def get_user_history(user_id: str, days: int = 7):
     for d in sorted(grouped.keys(), reverse=True):
         item = grouped[d]
         f_min = round(item["focused_minutes"], 1)
-        p_min = round(min(f_min, item["planned_minutes"]), 1)
+        p_min = round(item["planned_minutes"], 1)
         unp_min = round(item["unplanned_minutes"], 1)
         unk_min = round(item["unknown_minutes"], 1)
         history_list.append({
@@ -736,7 +750,9 @@ def get_user_history(user_id: str, days: int = 7):
 
 @app.get("/dashboard/{user_id}/platforms")
 def get_user_platforms(user_id: str, local_tz: str = "UTC"):
-    today_str = local_date_for_timezone(local_tz)
+    # Defect 2: validate timezone
+    resolved_tz = _resolve_timezone_for_user(local_tz, user_id)
+    today_str = local_date_for_timezone(resolved_tz)
     rollups = rollups_repo.get_user_rollups(user_id, days=1)
     platforms: Dict[str, float] = {}
     for r in rollups:
@@ -751,11 +767,13 @@ def get_user_current_runtime_state(user_id: str):
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+        # Defect 3: require BOTH technical_session AND intent_episode to be active
         cur.execute(
-            """SELECT t.session_id, t.episode_id, t.domain, e.purpose, e.intended_minutes
+            """SELECT t.session_id, t.episode_id, t.domain, e.purpose, e.intended_minutes,
+                      e.original_intended_minutes, e.extension_minutes, e.timer_mode
                FROM technical_sessions t
-               LEFT JOIN intent_episodes e ON t.episode_id = e.episode_id
-               WHERE t.user_id = ?
+               JOIN intent_episodes e ON t.episode_id = e.episode_id
+               WHERE t.user_id = ? AND t.status = 'active' AND e.status = 'active'
                ORDER BY t.rowid DESC LIMIT 1""",
             (user_id,)
         )
@@ -763,50 +781,83 @@ def get_user_current_runtime_state(user_id: str):
         current_session = None
         current_sid = None
         current_epid = None
+        current_domain = None
 
         if sess_row:
             sess_dict = dict(sess_row)
             current_sid = sess_dict["session_id"]
             current_epid = sess_dict["episode_id"]
+            current_domain = sess_dict["domain"]
+
+            # Compute current effective plan from episode fields
+            orig_m = sess_dict.get("original_intended_minutes")
+            ext_m = float(sess_dict.get("extension_minutes") or 0.0)
+            eff_planned = (float(orig_m) + ext_m) if (orig_m is not None and sess_dict.get("timer_mode") != "no_timer") else None
+
             ep_focused_mins = sessions_repo.get_episode_focused_minutes(current_epid) if current_epid else usage_tracker.calculate_focused_minutes(current_sid)
             current_session = {
                 "session_id": current_sid,
                 "episode_id": current_epid,
-                "domain": sess_dict["domain"],
+                "domain": current_domain,
                 "purpose": sess_dict.get("purpose") or "unknown",
-                "episode_focused_minutes": ep_focused_mins
+                "episode_focused_minutes": ep_focused_mins,
+                "effective_planned_minutes": round(eff_planned, 2) if eff_planned is not None else None,
+                "remaining_minutes": round(max(0.0, eff_planned - ep_focused_mins), 2) if eff_planned is not None else None
             }
 
+        # Defect 4: query optimization directly by current session_id and episode_id;
+        # do not fetch globally latest and discard on mismatch.
         latest_intervention = None
-        if current_session:
+        if current_session and (current_sid or current_epid):
+            # Build identity-matched query
+            params = []
+            clauses = []
+            if current_sid:
+                clauses.append("o.session_id = ?")
+                params.append(current_sid)
+            if current_epid:
+                # Also accept runs from previous technical sessions that share this episode
+                clauses.append(
+                    "(o.session_id IN (SELECT session_id FROM technical_sessions WHERE episode_id = ?))"
+                )
+                params.append(current_epid)
+
+            id_filter = " OR ".join(clauses)
             cur.execute(
-                """SELECT session_id, user_id, optimized_target, recommended_remaining, solver_status, created_at_utc
-                   FROM optimization_runs
-                   WHERE user_id = ?
-                   ORDER BY rowid DESC LIMIT 1""",
-                (user_id,)
+                f"""SELECT o.session_id, o.user_id, o.optimized_target, o.recommended_remaining,
+                          o.solver_status, o.created_at_utc,
+                          t.episode_id AS opt_episode_id, t.domain AS opt_domain
+                   FROM optimization_runs o
+                   JOIN technical_sessions t ON o.session_id = t.session_id
+                   WHERE o.user_id = ? AND ({id_filter})
+                   ORDER BY o.rowid DESC LIMIT 1""",
+                [user_id] + params
             )
             opt_row = cur.fetchone()
             if opt_row:
                 opt_dict = dict(opt_row)
-                opt_sid = opt_dict.get("session_id")
-
-                opt_epid = None
-                if opt_sid:
-                    cur.execute("SELECT episode_id FROM technical_sessions WHERE session_id = ?", (opt_sid,))
-                    ep_row = cur.fetchone()
-                    if ep_row:
-                        opt_epid = ep_row[0]
-
-                matches_session = (opt_sid and current_sid and opt_sid == current_sid)
+                # Verify identity: session, episode, and domain must all match
+                opt_epid = opt_dict.get("opt_episode_id")
+                opt_domain = opt_dict.get("opt_domain")
+                matches_session = (opt_dict.get("session_id") == current_sid)
                 matches_episode = (opt_epid and current_epid and opt_epid == current_epid)
-
-                if matches_session or matches_episode:
+                matches_domain = (opt_domain == current_domain)
+                if (matches_session or matches_episode) and matches_domain:
                     latest_intervention = opt_dict
 
+        if current_session is None:
+            return {
+                "user_id": user_id,
+                "current_session": None,
+                "latest_intervention": None,
+                "status": "NO_ACTIVE_SESSION"
+            }
+
         return {
+            "user_id": user_id,
             "current_session": current_session,
-            "latest_intervention": latest_intervention
+            "latest_intervention": latest_intervention,
+            "status": "ACTIVE"
         }
     finally:
         conn.close()

@@ -19,10 +19,17 @@ async function readJsonResponse(response) {
 }
 
 export async function fetchCanonicalUserDashboard(userId = "local_user") {
+  // Defect 2: pass the browser's IANA timezone so daily totals use the user's local date
+  const browserTimezone =
+    (typeof Intl !== "undefined" && Intl.DateTimeFormat)
+      ? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC")
+      : "UTC";
+  const tzParam = encodeURIComponent(browserTimezone);
+
   const [summaryRes, historyRes, platformsRes, goalRes, currentRes] = await Promise.all([
-    fetch(`${API_BASE_URL}/dashboard/${userId}/summary`),
-    fetch(`${API_BASE_URL}/dashboard/${userId}/history?days=7`),
-    fetch(`${API_BASE_URL}/dashboard/${userId}/platforms`),
+    fetch(`${API_BASE_URL}/dashboard/${userId}/summary?local_tz=${tzParam}`),
+    fetch(`${API_BASE_URL}/dashboard/${userId}/history?days=7&local_tz=${tzParam}`),
+    fetch(`${API_BASE_URL}/dashboard/${userId}/platforms?local_tz=${tzParam}`),
     fetch(`${API_BASE_URL}/dashboard/${userId}/goal`),
     fetch(`${API_BASE_URL}/dashboard/${userId}/current`).catch(() => null)
   ]);

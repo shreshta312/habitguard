@@ -329,16 +329,42 @@ async function _doReconcileActiveSession(reason) {
 
   // Local fallback if fetch failed during switch
   if (generation === sessionSwitchGeneration) {
+    const now2 = Date.now();
+
+    // Defect 6: if the stored session is already an OFFLINE_FALLBACK, check whether
+    // the gap since the fallback started exceeds the resumption threshold.
+    // If so, clear the session_id so queued events are not sent with an expired identity.
+    let fallbackSessionId = null;
+    if (currentSession && currentSession.domain === activeDomain) {
+      if (currentSession.canonicalState === "OFFLINE_FALLBACK") {
+        const fallbackStartedAt = currentSession.offlineFallbackStartedAt || currentSession.startedAt || now2;
+        const gapMs = now2 - fallbackStartedAt;
+        const gapMins = gapMs / (1000 * 60);
+        if (gapMins <= (SESSION_RESUME_GAP_MINUTES || 5)) {
+          fallbackSessionId = currentSession.session_id || null;
+        }
+        // gap exceeded: keep fallbackSessionId = null (no expired identity reuse)
+      } else {
+        // The existing session has a canonical server-confirmed id; do not reuse it
+        // while offline since we cannot verify it is still active on the backend.
+        // Leave fallbackSessionId = null.
+      }
+    }
+
     newSession = {
-      session_id: (currentSession && currentSession.domain === activeDomain) ? currentSession.session_id : null,
+      session_id: fallbackSessionId,
+      episode_id: null,
       domain: activeDomain,
       category: category,
-      startedAt: now,
-      lastUpdatedAt: now,
+      startedAt: now2,
+      lastUpdatedAt: now2,
       sessionMinutes: (currentSession && currentSession.domain === activeDomain) ? currentSession.sessionMinutes : 0,
       intentPurpose: "unknown",
       intendedMinutes: null,
-      canonicalState: "OFFLINE_FALLBACK"
+      canonicalState: "OFFLINE_FALLBACK",
+      offlineFallbackStartedAt: (currentSession && currentSession.canonicalState === "OFFLINE_FALLBACK" && currentSession.domain === activeDomain)
+        ? (currentSession.offlineFallbackStartedAt || currentSession.startedAt || now2)
+        : now2
     };
     await chrome.storage.local.set({ currentSession: newSession, sessionHistory: updatedHistory });
     console.warn("[HabitGuard] canonical session start failed; storing offline fallback");
@@ -543,7 +569,11 @@ async function flushOfflineQueue() {
 
   for (const entry of offlineQueue) {
     const sid = entry.session_id;
-    if (!sid) continue;
+    // Defect 6: skip events recorded under an expired offline fallback (no canonical id)
+    if (!sid) {
+      newDiagnostics.totalDropped = (newDiagnostics.totalDropped || 0) + 1;
+      continue;
+    }
     if (!bySession[sid]) bySession[sid] = [];
     bySession[sid].push(entry);
   }
@@ -784,6 +814,13 @@ async function updateLatestDeliveryState(decisionId, updates) {
           });
         }
       } else {
+        // chrome.notifications API is missing: record PERMISSION_DENIED and update
+        // latestIntervention so the popup is never left in a pending state.
+        await updateLatestDeliveryState(decisionId, {
+          delivery_status: "PERMISSION_DENIED",
+          failure_reason: "chrome.notifications API missing",
+          fallback_channel: "badge_popup"
+        });
         await recordDeliveryTrace({
           decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
           user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
