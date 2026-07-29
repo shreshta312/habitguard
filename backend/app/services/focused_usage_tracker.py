@@ -58,6 +58,8 @@ class FocusedUsageTracker:
             valid_activities.append(act)
 
         added = self.repo.add_activity_batch(session_id, user_id, domain, valid_activities)
+        inserted_activities = getattr(self.repo, "last_inserted_activities", valid_activities if added > 0 else [])
+
         total_focused_minutes = self.calculate_focused_minutes(session_id)
         reliability = self.calculate_tracking_reliability(valid_activities)
 
@@ -66,6 +68,7 @@ class FocusedUsageTracker:
             "events_received": len(activities),
             "events_added": added,
             "events_rejected": rejected_count,
+            "inserted_activities": inserted_activities,
             "total_focused_minutes": total_focused_minutes,
             "tracking_reliability": reliability
         }

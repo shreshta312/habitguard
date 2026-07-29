@@ -51,13 +51,17 @@ class DailyUsageRollupsRepository:
         end_timestamp_utc: str,
         duration_ms: float,
         classification: str = "unknown",
-        local_timezone: str = "UTC"
+        local_timezone: str = "UTC",
+        effective_planned_minutes: Optional[float] = None,
+        used_before_minutes: float = 0.0
     ):
         from datetime import datetime, timezone, timedelta
         import zoneinfo
 
         try:
             end_dt = datetime.fromisoformat(end_timestamp_utc.replace("Z", "+00:00"))
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
         except Exception:
             end_dt = datetime.now(timezone.utc)
 
@@ -75,17 +79,33 @@ class DailyUsageRollupsRepository:
         start_date_str = start_local.strftime("%Y-%m-%d")
         end_date_str = end_local.strftime("%Y-%m-%d")
 
+        def _calc_breakdown(interval_mins: float, start_offset_mins: float):
+            if classification != "unknown" and effective_planned_minutes is not None and effective_planned_minutes > 0:
+                used_before = start_offset_mins
+                used_after = used_before + interval_mins
+                planned_alloc = max(0.0, min(used_after, effective_planned_minutes) - min(used_before, effective_planned_minutes))
+                unplanned_alloc = max(0.0, interval_mins - planned_alloc)
+                unknown_alloc = 0.0
+            else:
+                planned_alloc = 0.0
+                unplanned_alloc = 0.0
+                unknown_alloc = interval_mins
+
+            necessary_alloc = interval_mins if classification in {"work_study", "necessary"} else 0.0
+            return planned_alloc, unplanned_alloc, unknown_alloc, necessary_alloc
+
         if start_date_str == end_date_str:
             focused_mins = round(duration_ms / 60000.0, 4)
-            necessary_mins = focused_mins if classification in {"work_study", "necessary"} else 0.0
-            unknown_mins = focused_mins if classification == "unknown" else 0.0
+            p_mins, unp_mins, unk_mins, nec_mins = _calc_breakdown(focused_mins, used_before_minutes)
             self.upsert_rollup(
                 user_id=user_id,
                 local_date=start_date_str,
                 domain=domain,
                 focused_minutes=focused_mins,
-                necessary_minutes=necessary_mins,
-                unknown_minutes=unknown_mins
+                planned_minutes=p_mins,
+                unplanned_minutes=unp_mins,
+                unknown_minutes=unk_mins,
+                necessary_minutes=nec_mins
             )
         else:
             midnight_local = (start_local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -95,13 +115,18 @@ class DailyUsageRollupsRepository:
             pre_mins = round(pre_midnight_sec / 60.0, 4)
             post_mins = round(post_midnight_sec / 60.0, 4)
 
+            p_mins1, unp_mins1, unk_mins1, nec_mins1 = _calc_breakdown(pre_mins, used_before_minutes)
+            p_mins2, unp_mins2, unk_mins2, nec_mins2 = _calc_breakdown(post_mins, used_before_minutes + pre_mins)
+
             self.upsert_rollup(
                 user_id=user_id,
                 local_date=start_date_str,
                 domain=domain,
                 focused_minutes=pre_mins,
-                necessary_minutes=pre_mins if classification in {"work_study", "necessary"} else 0.0,
-                unknown_minutes=pre_mins if classification == "unknown" else 0.0
+                planned_minutes=p_mins1,
+                unplanned_minutes=unp_mins1,
+                unknown_minutes=unk_mins1,
+                necessary_minutes=nec_mins1
             )
 
             self.upsert_rollup(
@@ -109,8 +134,10 @@ class DailyUsageRollupsRepository:
                 local_date=end_date_str,
                 domain=domain,
                 focused_minutes=post_mins,
-                necessary_minutes=post_mins if classification in {"work_study", "necessary"} else 0.0,
-                unknown_minutes=post_mins if classification == "unknown" else 0.0
+                planned_minutes=p_mins2,
+                unplanned_minutes=unp_mins2,
+                unknown_minutes=unk_mins2,
+                necessary_minutes=nec_mins2
             )
 
     def get_user_rollups(self, user_id: str, days: int = 7) -> List[Dict[str, Any]]:

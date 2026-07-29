@@ -1,4 +1,6 @@
 import pandas as pd
+from pathlib import Path
+from app.core.config import PROJECT_ROOT
 
 
 class DatasetService:
@@ -7,32 +9,43 @@ class DatasetService:
     for selected users and apps.
     """
 
-    def __init__(self, csv_path):
-        self.csv_path = csv_path
+    def __init__(self, csv_path=None):
+        if csv_path is None:
+            self.csv_path = PROJECT_ROOT / "data" / "processed" / "cleaned_screen_time.csv"
+        else:
+            p = Path(csv_path)
+            if not p.is_absolute():
+                p = PROJECT_ROOT / p
+            self.csv_path = p
 
     def load_data(self):
-        df = pd.read_csv(self.csv_path)
+        empty_df = pd.DataFrame(columns=["user_id", "date", "app_name", "screen_time_min"])
+        if not self.csv_path.exists():
+            return empty_df
 
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df["screen_time_min"] = pd.to_numeric(
-            df["screen_time_min"],
-            errors="coerce"
-        )
+        try:
+            df = pd.read_csv(self.csv_path)
 
-        df = df.dropna(
-            subset=["user_id", "date", "app_name", "screen_time_min"]
-        )
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df["screen_time_min"] = pd.to_numeric(
+                df["screen_time_min"],
+                errors="coerce"
+            )
 
-        # Normalize once during loading instead of repeatedly casting
-        # inside every query method.
-        df["user_id"] = df["user_id"].astype(str)
-        df["app_name"] = df["app_name"].astype(str)
+            df = df.dropna(
+                subset=["user_id", "date", "app_name", "screen_time_min"]
+            )
 
-        df = df.sort_values(
-            by=["user_id", "app_name", "date"]
-        )
+            df["user_id"] = df["user_id"].astype(str)
+            df["app_name"] = df["app_name"].astype(str)
 
-        return df
+            df = df.sort_values(
+                by=["user_id", "app_name", "date"]
+            )
+
+            return df
+        except Exception:
+            return empty_df
 
     def get_user_app_usage(self, df, user_id, app_name):
         """

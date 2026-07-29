@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 from app.db.connection import get_db_connection
 
@@ -65,14 +65,25 @@ class SessionsRepository:
         now_iso: Optional[str] = None
     ) -> Dict[str, Any]:
         from app.core.config import SESSION_RESUME_GAP_MINUTES
-        now_dt = datetime.now(timezone.utc)
-        now_utc = now_iso or now_dt.isoformat()
+        if now_iso:
+            try:
+                now_dt = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+                if now_dt.tzinfo is None:
+                    now_dt = now_dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                now_dt = datetime.now(timezone.utc)
+            now_utc = now_iso
+        else:
+            now_dt = datetime.now(timezone.utc)
+            now_utc = now_dt.isoformat()
 
         active_ep = self.get_active_intent_episode(user_id, domain)
         if active_ep:
-            unfocused_str = active_ep.get("unfocused_at_utc") or active_ep.get("last_activity_at_utc") or active_ep.get("started_at_utc")
+            unfocused_str = active_ep.get("unfocused_at_utc") or active_ep.get("last_focused_at_utc") or active_ep.get("last_activity_at_utc") or active_ep.get("started_at_utc")
             try:
                 unfocused_dt = datetime.fromisoformat(unfocused_str.replace("Z", "+00:00"))
+                if unfocused_dt.tzinfo is None:
+                    unfocused_dt = unfocused_dt.replace(tzinfo=timezone.utc)
                 gap_minutes = (now_dt - unfocused_dt).total_seconds() / 60.0
             except Exception:
                 gap_minutes = 999.0
@@ -87,8 +98,8 @@ class SessionsRepository:
                 try:
                     with conn:
                         conn.execute(
-                            "UPDATE intent_episodes SET last_activity_at_utc = ?, unfocused_at_utc = NULL, updated_at_utc = ? WHERE episode_id = ?",
-                            (now_utc, now_utc, active_ep["episode_id"])
+                            "UPDATE intent_episodes SET last_activity_at_utc = ?, last_focused_at_utc = ?, unfocused_at_utc = NULL, updated_at_utc = ? WHERE episode_id = ?",
+                            (now_utc, now_utc, now_utc, active_ep["episode_id"])
                         )
                     return self.get_intent_episode(active_ep["episode_id"])
                 finally:
@@ -266,6 +277,7 @@ class SessionsRepository:
         conn = get_db_connection()
         now_utc = datetime.now(timezone.utc).isoformat()
         added_count = 0
+        inserted_activities = []
         try:
             with conn:
                 for act in activities:
@@ -284,6 +296,19 @@ class SessionsRepository:
                     )
                     if cur.rowcount > 0:
                         added_count += 1
+                        inserted_activities.append(act)
+
+                if added_count > 0:
+                    cur = conn.cursor()
+                    cur.execute("SELECT episode_id FROM technical_sessions WHERE session_id = ?", (session_id,))
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        ep_id = row[0]
+                        conn.execute(
+                            "UPDATE intent_episodes SET last_activity_at_utc = ?, last_focused_at_utc = ?, unfocused_at_utc = NULL, updated_at_utc = ? WHERE episode_id = ?",
+                            (now_utc, now_utc, now_utc, ep_id)
+                        )
+            self.last_inserted_activities = inserted_activities
             return added_count
         finally:
             conn.close()
@@ -318,5 +343,57 @@ class SessionsRepository:
             cur = conn.cursor()
             cur.execute("SELECT * FROM session_outcomes WHERE session_id = ?", (session_id,))
             return dict(cur.fetchone())
+        finally:
+            conn.close()
+
+    def get_reopen_count(self, episode_id: Optional[str]) -> int:
+        if not episode_id:
+            return 0
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM technical_sessions WHERE episode_id = ?", (episode_id,))
+            row = cur.fetchone()
+            cnt = row[0] if row else 1
+            return max(0, cnt - 1)
+        finally:
+            conn.close()
+
+    def get_historical_overrun_rate(self, user_id: str) -> float:
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT actual_focused_minutes, planned_minutes FROM session_outcomes WHERE user_id = ? AND planned_minutes IS NOT NULL AND planned_minutes > 0", (user_id,))
+            rows = cur.fetchall()
+            if not rows:
+                return 0.0
+            overruns = sum(1 for r in rows if r[0] > r[1])
+            return round(overruns / float(len(rows)), 4)
+        finally:
+            conn.close()
+
+    def get_ordered_cross_domain_switches(self, user_id: str, days: int = 1) -> int:
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            cur.execute(
+                """SELECT domain FROM technical_sessions
+                   WHERE user_id = ? AND started_at_utc >= ?
+                   ORDER BY started_at_utc ASC""",
+                (user_id, cutoff)
+            )
+            rows = cur.fetchall()
+            if not rows:
+                return 0
+
+            domains = [r[0] for r in rows if r[0]]
+            switches = 0
+            prev_domain = None
+            for d in domains:
+                if prev_domain is not None and d != prev_domain:
+                    switches += 1
+                prev_domain = d
+            return switches
         finally:
             conn.close()

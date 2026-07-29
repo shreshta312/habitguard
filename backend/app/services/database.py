@@ -6,19 +6,29 @@ from contextlib import contextmanager
 
 DATABASE_FILE = Path(__file__).resolve().parents[2] / "data" / "habitguard.db"
 
+def get_db_path() -> Path:
+    from app.core.config import DB_PATH
+    return DB_PATH
+
 class DatabaseManager:
-    def __init__(self):
-        DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: Path = None):
+        self.db_path = db_path
         self._create_tables()
-        self._migrate_jsonl_data()
+
+    def _get_target_path(self) -> Path:
+        if self.db_path:
+            return self.db_path
+        if DATABASE_FILE != Path(__file__).resolve().parents[2] / "data" / "habitguard.db":
+            return DATABASE_FILE
+        return get_db_path()
 
     def get_connection(self):
         """Open a new connection, configure WAL mode and busy_timeout, and return it."""
-        conn = sqlite3.connect(str(DATABASE_FILE))
+        target_path = self._get_target_path()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(target_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
-        # Enable WAL mode for concurrent reads & writes
         conn.execute("PRAGMA journal_mode=WAL")
-        # Set busy timeout to 5 seconds so sqlite doesn't throw immediate locked errors
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
@@ -82,15 +92,23 @@ class DatabaseManager:
                 )
             """)
 
-            # ── Backward-compatible aliases for the old table names ──
-            conn.execute("""
-                CREATE VIEW IF NOT EXISTS snapshots AS
-                SELECT * FROM usage_snapshots
-            """)
-            conn.execute("""
-                CREATE VIEW IF NOT EXISTS feedback_events AS
-                SELECT * FROM feedback
-            """)
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE name='feedback_events'")
+            if not cur.fetchone():
+                conn.execute("CREATE VIEW IF NOT EXISTS feedback_events AS SELECT * FROM feedback")
+
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='usage_snapshots'")
+            if cur.fetchone():
+                conn.execute("CREATE VIEW IF NOT EXISTS snapshots AS SELECT * FROM usage_snapshots")
+
+            # Create snapshots alias view only if no table or view named snapshots exists
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE name='snapshots'")
+            if not cur.fetchone():
+                conn.execute("""
+                    CREATE VIEW IF NOT EXISTS snapshots AS
+                    SELECT * FROM usage_snapshots
+                """)
 
     # ── JSONL migration (one-time, from legacy flat files) ────────────────
 
@@ -315,4 +333,15 @@ class DatabaseManager:
                     continue
             return interventions
 
-db_manager = DatabaseManager()
+class _LazyDatabaseManager:
+    _instance = None
+
+    def _get_mgr(self):
+        if self._instance is None:
+            self._instance = DatabaseManager()
+        return self._instance
+
+    def __getattr__(self, item):
+        return getattr(self._get_mgr(), item)
+
+db_manager = _LazyDatabaseManager()

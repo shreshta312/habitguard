@@ -39,6 +39,8 @@ class TestLegacyTimerLabels:
             pytest.skip("No user1 in test dataset")
         assert resp.status_code == 200
         data = resp.json()
+        if data.get("status") == "ANALYTICS_DATA_UNAVAILABLE":
+            pytest.skip("Optional analytics CSV dataset not present")
         assert data["timer_source"] == "STRUCTURAL_TIMER_LEGACY"
         assert data["optimization_status"] == "LEGACY_FALLBACK"
         assert data["is_optimized_target"] is False

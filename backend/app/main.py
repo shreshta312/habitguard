@@ -101,6 +101,7 @@ class SessionStartRequest(BaseModel):
     intended_minutes: Optional[float] = None
     timer_mode: Optional[str] = "planned"
     remember_today: Optional[bool] = False
+    local_timezone: Optional[str] = "UTC"
 
 class IntentUpdateRequest(BaseModel):
     purpose: Optional[str] = None
@@ -134,6 +135,7 @@ class DeliveryTraceRequest(BaseModel):
 
 class BatchActivityRequest(BaseModel):
     activities: List[Dict[str, Any]]
+    current_category: Optional[str] = None
 
 class LegacyContextRequest(BaseModel):
     current_domain: Optional[str] = None
@@ -185,7 +187,8 @@ def start_session(req: SessionStartRequest):
         purpose=req.purpose,
         intended_minutes=req.intended_minutes,
         timer_mode=req.timer_mode or "planned",
-        remember_today=req.remember_today or False
+        remember_today=req.remember_today or False,
+        local_timezone=req.local_timezone or "UTC"
     )
     return session
 
@@ -195,6 +198,11 @@ def get_session(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+@app.post("/sessions/{session_id}/unfocus")
+def record_session_unfocused(session_id: str, timestamp_utc: Optional[str] = None):
+    sessions_repo.set_unfocused_timestamp(session_id, timestamp_utc)
+    return {"status": "success", "session_id": session_id}
 
 @app.post("/sessions/{session_id}/intent")
 @app.patch("/sessions/{session_id}/intent")
@@ -228,29 +236,8 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
     if purpose == "no_timer":
         purpose = "unknown"
     local_tz               = session.get("local_timezone", "UTC")
+    episode_id             = session.get("episode_id")
 
-    # Record interval into daily rollups with cross-midnight partitioning
-    for act in req.activities:
-        duration_ms = act.get("focused_duration_ms")
-        ts_utc = act.get("event_timestamp_utc") or datetime.now(timezone.utc).isoformat()
-        if duration_ms and duration_ms > 0:
-            rollups_repo.record_activity_interval(
-                user_id=user_id,
-                domain=domain,
-                end_timestamp_utc=ts_utc,
-                duration_ms=duration_ms,
-                classification=purpose,
-                local_timezone=local_tz
-            )
-
-    focused_mins = track_res["total_focused_minutes"]
-    episode_id   = session.get("episode_id")
-    episode_focused_mins = sessions_repo.get_episode_focused_minutes(episode_id) if episode_id else focused_mins
-
-    intent                 = session.get("intent") or {}
-    purpose                = intent.get("purpose", "unknown")
-    if purpose == "no_timer":
-        purpose = "unknown"
     original_intended_mins = intent.get("intended_minutes")
     extension_mins         = float(intent.get("extension_minutes", 0.0) or 0.0)
     timer_mode             = intent.get("timer_mode", "planned")
@@ -261,30 +248,85 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
     else:
         effective_planned_mins = float(original_intended_mins) + extension_mins
 
-    base_res            = baseline_service.get_baseline(user_id, domain, purpose)
-    contextual_baseline = base_res["baseline_minutes"]
+    focused_mins = track_res["total_focused_minutes"]
+    episode_focused_mins = sessions_repo.get_episode_focused_minutes(episode_id) if episode_id else focused_mins
+
+    # Phase 6: Record interval ONLY for newly inserted activities with accurate allocation
+    inserted_acts = track_res.get("inserted_activities", [])
+    for act in inserted_acts:
+        duration_ms = act.get("focused_duration_ms")
+        ts_utc = act.get("event_timestamp_utc") or datetime.now(timezone.utc).isoformat()
+        if duration_ms and duration_ms > 0:
+            dur_mins = duration_ms / 60000.0
+            used_before = max(0.0, episode_focused_mins - dur_mins)
+            rollups_repo.record_activity_interval(
+                user_id=user_id,
+                domain=domain,
+                end_timestamp_utc=ts_utc,
+                duration_ms=duration_ms,
+                classification=purpose,
+                local_timezone=local_tz,
+                effective_planned_minutes=effective_planned_mins,
+                used_before_minutes=used_before
+            )
+
+    # Phase 2: Category validation
+    valid_categories = {"productive", "mixed", "temptation", "neutral"}
+    raw_cat = req.current_category or session.get("category")
+    current_category = raw_cat if raw_cat in valid_categories else "neutral"
+
+    # Phase 7: Calculate actual distracting usage today across monitored domains
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_rollups = rollups_repo.get_user_rollups(user_id, days=1)
+    today_distracting = sum(
+        max(0.0, float(r.get("focused_minutes", 0)) - float(r.get("necessary_minutes", 0)))
+        for r in today_rollups
+        if r.get("local_date") == today_str
+    )
+    focused_minutes_used_today = max(today_distracting, episode_focused_mins)
 
     cross_domain_ctx = cross_domain_service.get_cross_domain_context(
         user_id=user_id,
         current_domain=domain,
         days=7,
-        focused_minutes_used_today=episode_focused_mins,
+        focused_minutes_used_today=focused_minutes_used_today,
     )
     cross_domain_allowance = cross_domain_ctx["cross_domain_allowance_minutes"]
+
+    # Phase 3: Derived real behavioral features
+    reopen_cnt = sessions_repo.get_reopen_count(episode_id)
+    hist_overrun_rate = sessions_repo.get_historical_overrun_rate(user_id)
+    cross_switches = sessions_repo.get_ordered_cross_domain_switches(user_id, days=1)
 
     feedback_sum = feedback_service.get_summary(user_id)
     features = feature_service.extract_features(
         focused_minutes=episode_focused_mins,
         planned_minutes=effective_planned_mins,
         purpose=purpose,
+        reopen_count=reopen_cnt,
+        uninterrupted_minutes=focused_mins,
+        cross_domain_switches=cross_switches,
+        historical_overrun_rate=hist_overrun_rate,
         feedback_summary=feedback_sum
     )
 
     tempt_res = temptation_estimator.estimate(features, purpose=purpose)
+
+    # Phase 4: Load contextual personal parameters
+    dur_param = params_repo.get_parameter(user_id, f"learned_sufficient_duration_{domain}_{purpose}")
+    learned_dur = float(dur_param["value"]) if dur_param else None
+    count_param = params_repo.get_parameter(user_id, f"task_not_finished_count_{domain}")
+    not_finished_cnt = int(count_param["value"]) if count_param else 0
+
+    base_res            = baseline_service.get_baseline(user_id, domain, purpose)
+    contextual_baseline = base_res["baseline_minutes"]
+
     util_res  = utility_estimator.estimate(
         purpose=purpose,
         planned_minutes=effective_planned_mins,
-        contextual_baseline=contextual_baseline
+        contextual_baseline=contextual_baseline,
+        learned_sufficient_duration=learned_dur,
+        task_not_finished_count=not_finished_cnt
     )
 
     opt_res = optimizer.solve(
@@ -347,7 +389,8 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
         context={
             "session_minutes": episode_focused_mins,
             "planned_minutes": effective_planned_mins,
-            "current_domain": domain
+            "current_domain": domain,
+            "current_category": current_category
         },
         feedback_summary=feedback_sum
     )
@@ -532,10 +575,11 @@ def record_delivery_trace(req: DeliveryTraceRequest):
     )
     return {"status": "success", "trace": trace}
 
+@app.get("/health")
 @app.get("/dashboard/debug/health")
 def get_debug_health():
     import subprocess
-    git_commit = "9b92c33"
+    git_commit = "f4aa05e"
     try:
         git_commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(PROJECT_ROOT), text=True).strip()
     except Exception:
@@ -546,6 +590,7 @@ def get_debug_health():
         "status": "ok",
         "app_version": "2.0.0",
         "git_commit": git_commit,
+        "commit_build_id": git_commit,
         "schema_version": 1,
         "runtime_database_path": str(DB_PATH),
         "canonical_pipeline_version": "2.0.0"
@@ -553,15 +598,28 @@ def get_debug_health():
 
 @app.get("/dashboard/{user_id}/summary")
 def get_user_summary(user_id: str):
-    rollups = rollups_repo.get_user_rollups(user_id, days=7)
-    total_focused = sum(r["focused_minutes"] for r in rollups)
-    total_unplanned = sum(r["unplanned_minutes"] for r in rollups)
+    rollups = rollups_repo.get_user_rollups(user_id, days=14)
+    distinct_dates = sorted(list(set(r["local_date"] for r in rollups if r.get("local_date"))))
+    total_focused = sum(r.get("focused_minutes", 0) for r in rollups)
+    total_unplanned = sum(r.get("unplanned_minutes", 0) for r in rollups)
 
-    eval_res = outcome_evaluator.evaluate(
-        baseline_unplanned_minutes=45.0,
-        current_unplanned_minutes=total_unplanned,
-        sample_count=len(rollups)
-    )
+    if len(distinct_dates) < 3:
+        eval_res = {
+            "status": "INSUFFICIENT_DATA",
+            "unplanned_usage_reduction": None,
+            "message": "Insufficient baseline evidence to evaluate progress."
+        }
+    else:
+        mid = len(distinct_dates) // 2
+        baseline_dates = set(distinct_dates[:mid])
+        current_dates = set(distinct_dates[mid:])
+        baseline_unplanned = sum(r.get("unplanned_minutes", 0) for r in rollups if r.get("local_date") in baseline_dates)
+        current_unplanned = sum(r.get("unplanned_minutes", 0) for r in rollups if r.get("local_date") in current_dates)
+        eval_res = outcome_evaluator.evaluate(
+            baseline_unplanned_minutes=baseline_unplanned,
+            current_unplanned_minutes=current_unplanned,
+            sample_count=len(distinct_dates)
+        )
 
     return {
         "user_id": user_id,
@@ -640,16 +698,52 @@ def get_research_parameters(user_id: str):
 def get_research_outcomes(user_id: str):
     """Research route: realized vs targeted reduction with substitution context."""
     rollups = rollups_repo.get_user_rollups(user_id, days=30)
-    total_unplanned = sum(r["unplanned_minutes"] for r in rollups)
-    total_focused   = sum(r["focused_minutes"]   for r in rollups)
+    distinct_dates = sorted(list(set(r["local_date"] for r in rollups if r.get("local_date"))))
+    total_unplanned = sum(r.get("unplanned_minutes", 0) for r in rollups)
+    total_focused   = sum(r.get("focused_minutes", 0)   for r in rollups)
     goal = goals_repo.get_goal(user_id)
     target_reduction_pct = float(goal.get("target_reduction_percent", 20.0)) if goal else 20.0
 
-    eval_res = outcome_evaluator.evaluate(
-        baseline_unplanned_minutes=50.0,
-        current_unplanned_minutes=total_unplanned,
-        sample_count=len(rollups)
+    if len(distinct_dates) < 3:
+        eval_res = {
+            "status": "INSUFFICIENT_DATA",
+            "unplanned_usage_reduction": None,
+            "message": "Insufficient baseline evidence to evaluate progress.",
+            "window_dates": distinct_dates,
+            "sample_counts": len(distinct_dates),
+            "baseline_value": None,
+            "comparison_value": total_unplanned,
+            "calculation": "None (insufficient historical baseline window data)"
+        }
+    else:
+        mid = len(distinct_dates) // 2
+        baseline_dates = set(distinct_dates[:mid])
+        current_dates = set(distinct_dates[mid:])
+        baseline_unplanned = sum(r.get("unplanned_minutes", 0) for r in rollups if r.get("local_date") in baseline_dates)
+        current_unplanned = sum(r.get("unplanned_minutes", 0) for r in rollups if r.get("local_date") in current_dates)
+        eval_res = outcome_evaluator.evaluate(
+            baseline_unplanned_minutes=baseline_unplanned,
+            current_unplanned_minutes=current_unplanned,
+            sample_count=len(distinct_dates)
+        )
+        eval_res["window_dates"] = distinct_dates
+        eval_res["sample_counts"] = len(distinct_dates)
+        eval_res["baseline_value"] = baseline_unplanned
+        eval_res["comparison_value"] = current_unplanned
+        eval_res["calculation"] = f"({baseline_unplanned:.2f} - {current_unplanned:.2f}) / {baseline_unplanned + 1e-5:.2f}"
+
+    cross_domain_ctx = cross_domain_service.get_cross_domain_context(
+        user_id=user_id, current_domain="", days=30
     )
+    return {
+        "user_id":              user_id,
+        "evaluation":           eval_res,
+        "targeted_reduction_pct": target_reduction_pct,
+        "total_focused_minutes":  round(total_focused, 2),
+        "total_unplanned_minutes": round(total_unplanned, 2),
+        "cross_domain_context":   cross_domain_ctx,
+        "effectiveness_caveat":   "Behavioral effectiveness requires baseline-vs-intervention data from real extension usage.",
+    }
     cross_domain_ctx = cross_domain_service.get_cross_domain_context(
         user_id=user_id, current_domain="", days=30
     )
@@ -667,14 +761,6 @@ def get_research_outcomes(user_id: str):
 # ==========================================
 # 3. DEBUG ENDPOINTS
 # ==========================================
-
-@app.get("/dashboard/debug/health")
-def get_debug_health():
-    return {
-        "status": "ok",
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "version": "2.0.0"
-    }
 
 @app.get("/dashboard/debug/events")
 def get_debug_events(user_id: str = "local_user"):
@@ -718,6 +804,8 @@ def get_custom_intervention(req: LegacyCustomUsageRequest):
 @app.get("/habitguard/user/{user_id}/intervention")
 def get_user_intervention(user_id: str):
     summary = habitguard_service.get_user_daily_summary(user_id)
+    if summary.get("status") == "ANALYTICS_DATA_UNAVAILABLE":
+        return summary
     if "error" in summary:
         raise HTTPException(status_code=404, detail=summary["error"])
     daily_history    = summary.get("daily_usage_history", [])
@@ -729,7 +817,6 @@ def get_user_intervention(user_id: str):
         feedback_summary=feedback_summary
     )
     dec["user_id"]             = user_id
-    # Fix 5 — legacy timer label
     dec["timer_source"]        = "STRUCTURAL_TIMER_LEGACY"
     dec["optimization_status"] = "LEGACY_FALLBACK"
     dec["is_optimized_target"] = False
@@ -739,6 +826,8 @@ def get_user_intervention(user_id: str):
 @app.get("/habitguard/user/{user_id}/summary")
 def get_legacy_user_summary(user_id: str):
     res = habitguard_service.get_user_daily_summary(user_id)
+    if res.get("status") == "ANALYTICS_DATA_UNAVAILABLE":
+        return res
     if "error" in res:
         raise HTTPException(status_code=404, detail=res["error"])
     return res
@@ -746,6 +835,8 @@ def get_legacy_user_summary(user_id: str):
 @app.get("/habitguard/user/{user_id}/apps/{app_name}/summary")
 def get_legacy_app_summary(user_id: str, app_name: str):
     res = habitguard_service.get_user_app_summary(user_id, app_name)
+    if res.get("status") == "ANALYTICS_DATA_UNAVAILABLE":
+        return res
     if "error" in res:
         raise HTTPException(status_code=404, detail=res["error"])
     return res

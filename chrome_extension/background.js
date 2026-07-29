@@ -141,6 +141,34 @@ function closeCurrentSession(currentSession, sessionHistory, endedAt) {
   return updatedHistory.slice(0, MAX_SESSION_HISTORY);
 }
 
+let lastUnfocusedSessionId = null;
+
+function isExtensionTransientUrl(url) {
+  if (!url) return true;
+  const lower = url.toLowerCase();
+  return (
+    lower.startsWith("chrome-extension://") ||
+    lower.startsWith("devtools://") ||
+    lower.startsWith("chrome-devtools://") ||
+    lower.startsWith("chrome://") ||
+    lower.startsWith("about:")
+  );
+}
+
+async function notifySessionUnfocused(sessionId) {
+  if (!sessionId || sessionId === lastUnfocusedSessionId) return;
+  lastUnfocusedSessionId = sessionId;
+  try {
+    const apiBase = await getApiBaseUrl();
+    await fetch(`${apiBase}/sessions/${sessionId}/unfocus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    }).catch((err) => console.warn("[HabitGuard] unfocus notification failed:", err));
+  } catch (err) {
+    console.warn("[HabitGuard] notifySessionUnfocused error:", err);
+  }
+}
+
 /**
  * Authoritative background function to reconcile active browser session.
  * Mutex serialized to prevent race conditions during rapid domain switches.
@@ -166,7 +194,7 @@ async function _doReconcileActiveSession(reason) {
   if (activeTab && activeTab.windowId !== undefined) {
     try {
       const win = await chrome.windows.get(activeTab.windowId);
-      windowFocused = win.focused && win.type === "normal";
+      windowFocused = win.focused && win.type === "normal" && win.state !== "minimized";
     } catch {
       windowFocused = false;
     }
@@ -176,15 +204,30 @@ async function _doReconcileActiveSession(reason) {
   const storedDomain = currentSession ? currentSession.domain : null;
   console.log(`[HabitGuard] stored domain: ${storedDomain || "none"}`);
 
-  const isIgnoredUrl = !rawUrl || !isTrackableUrl(rawUrl);
+  // Rule A: EXTENSION_TRANSIENT (popup, extension pages, devtools, chrome://)
+  if (isExtensionTransientUrl(rawUrl)) {
+    console.log(`[HabitGuard] active domain: transient extension page/popup (session preserved)`);
+    return currentSession;
+  }
 
-  if (isIgnoredUrl || !windowFocused) {
-    console.log(`[HabitGuard] active domain: null (internal/unfocused)`);
+  // Rule B: GENUINELY_UNFOCUSED (window unfocused, minimized, WINDOW_ID_NONE)
+  if (!windowFocused) {
+    console.log(`[HabitGuard] active domain: null (genuinely unfocused / minimized)`);
+    if (currentSession && currentSession.session_id) {
+      notifySessionUnfocused(currentSession.session_id);
+    }
     return currentSession;
   }
 
   const activeDomain = getDomain(rawUrl);
   console.log(`[HabitGuard] active domain: ${activeDomain}`);
+
+  // Rule C: DIFFERENT_TRACKABLE_DOMAIN (session switch)
+  if (currentSession && currentSession.domain && currentSession.domain !== activeDomain) {
+    if (currentSession.session_id) {
+      notifySessionUnfocused(currentSession.session_id);
+    }
+  }
 
   // Do not track dev localhost/127.0.0.1 unless user explicitly categorized it
   if ((activeDomain === "localhost" || activeDomain === "127.0.0.1") && !userDomainCategories[activeDomain]) {
@@ -210,7 +253,10 @@ async function _doReconcileActiveSession(reason) {
 
   let newSession = null;
   try {
-    const apiBase = await getApiBaseUrl();
+    const browserTimezone = (typeof Intl !== "undefined" && Intl.DateTimeFormat)
+      ? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC")
+      : "UTC";
+
     const response = await fetch(`${apiBase}/sessions/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -220,7 +266,8 @@ async function _doReconcileActiveSession(reason) {
         purpose: "unknown",
         intended_minutes: null,
         timer_mode: "no_timer",
-        remember_today: true
+        remember_today: true,
+        local_timezone: browserTimezone
       })
     });
 
@@ -413,25 +460,17 @@ function mergeCanonicalSessionIntent(currentSession, canonicalData) {
 async function sendActivityBatch(sessionId, activities) {
   try {
     const apiBase = await getApiBaseUrl();
+    const stored = await chrome.storage.local.get(["currentSession"]);
+    const currentCategory = stored.currentSession?.category || "neutral";
+
     const response = await fetch(`${apiBase}/sessions/${sessionId}/activity/batch`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ activities })
+      body: JSON.stringify({ activities, current_category: currentCategory })
     });
     if (response.ok) {
       const batchData = await parseApiResponse(response);
-      const stored = await chrome.storage.local.get(["currentSession"]);
-      const updatedSess = mergeCanonicalSessionIntent(stored.currentSession, batchData);
-
-      await chrome.storage.local.set({
-        currentSession: updatedSess,
-        latestIntervention: batchData,
-        latestInterventionCheckedAt: Date.now()
-      });
-      await updateBadge(batchData);
-      if (batchData.should_intervene && shouldTriggerNotification(batchData)) {
-        await showInterventionNotification(batchData);
-      }
+      await consumeCanonicalDecision(batchData, "activity_heartbeat");
       return true;
     }
     // Session expired (404) on backend: return true so caller does not queue dead session events
@@ -597,195 +636,191 @@ async function recordDeliveryTrace(trace) {
   }
 }
 
-async function showInterventionNotification(intervention) {
-  const stored = await chrome.storage.local.get(["currentSession", "consumedDecisionIds"]);
-  const currentSession = stored.currentSession;
-  const consumedIds = new Set(stored.consumedDecisionIds || []);
+async function consumeCanonicalDecision(batchData, source = "activity_heartbeat") {
+  if (!batchData) return;
 
-  const decisionId = intervention?.decision_id || `dec_${Date.now()}`;
-  const sessionId = currentSession?.session_id || "unknown_session";
-  const episodeId = currentSession?.episode_id || null;
-  const domain = currentSession?.domain || intervention?.domain || "unknown_domain";
+  const stored = await chrome.storage.local.get(["currentSession", "consumedDecisionIds", "lastNotificationAt", "lastOverlayAt"]);
+  let currentSession = stored.currentSession;
+
+  // 1. Merge intent safely
+  currentSession = mergeCanonicalSessionIntent(currentSession, batchData);
+
+  // 2. Update badge
+  await updateBadge(batchData);
+
+  const decisionId = batchData.decision_id || `dec_${Date.now()}`;
+  const sessionId = batchData.session_id || currentSession?.session_id || "unknown_session";
+  const episodeId = batchData.episode_id || currentSession?.episode_id || null;
+  const domain = batchData.domain || currentSession?.domain || "unknown_domain";
   const attemptedAt = new Date().toISOString();
 
-  // Idempotency check: prevent duplicate notifications for the same decision_id
-  if (consumedIds.has(decisionId)) {
-    debugLog(`[HabitGuard] Decision ${decisionId} already consumed. Skipping duplicate notification.`);
-    return;
-  }
+  // 3. Save current session and intervention state
+  await chrome.storage.local.set({
+    currentSession,
+    latestIntervention: batchData,
+    latestInterventionCheckedAt: Date.now()
+  });
+
+  // 4. Check idempotency
+  const consumedIds = new Set(stored.consumedDecisionIds || []);
+  const isAlreadyConsumed = consumedIds.has(decisionId);
   consumedIds.add(decisionId);
   await chrome.storage.local.set({ consumedDecisionIds: Array.from(consumedIds).slice(-100) });
 
-  if (!intervention || !intervention.should_notify) {
-    await recordDeliveryTrace({
-      decision_id: decisionId,
-      session_id: sessionId,
-      episode_id: episodeId,
-      user_id: "local_user",
-      domain,
-      channel: "notification",
-      requested_channel: "notification",
-      fallback_channel: null,
-      intervention_preserved: false,
-      should_notify: false,
-      should_overlay: false,
-      eligible: false,
-      attempted_at_utc: attemptedAt,
-      delivery_status: "NOT_ELIGIBLE",
-      chrome_notification_id: null,
-      failure_reason: "Notification not required for decision"
-    });
+  if (isAlreadyConsumed) {
+    debugLog(`[HabitGuard] Decision ${decisionId} already consumed. Skipping notification/overlay.`);
     return;
   }
 
-  const cooldownActive = await isNotificationCooldownActive(intervention);
-  if (cooldownActive) {
-    await recordDeliveryTrace({
-      decision_id: decisionId,
-      session_id: sessionId,
-      episode_id: episodeId,
-      user_id: "local_user",
-      domain,
-      channel: "notification",
-      requested_channel: "notification",
-      fallback_channel: "badge_popup",
-      intervention_preserved: true,
-      should_notify: true,
-      should_overlay: false,
-      eligible: false,
-      attempted_at_utc: attemptedAt,
-      delivery_status: "SUPPRESSED",
-      chrome_notification_id: null,
-      failure_reason: "cooldown_active",
-      cooldown_source: "VERSIONED_DEFAULT",
-      next_eligible_at: new Date(Date.now() + 15 * 60 * 1000).toISOString()
-    });
-    const updated = {
-      ...intervention,
-      delivery_status: "SUPPRESSED",
-      suppression_reason: "cooldown_active",
-      fallback_channel: "badge_popup",
-      intervention_preserved: true
-    };
-    await chrome.storage.local.set({ latestIntervention: updated });
-    return;
-  }
+  // 5. Handle Native Notification Delivery if independently eligible
+  if (batchData.should_notify) {
+    const lastNotifAt = stored.lastNotificationAt || 0;
+    const notifCooldownMins = getInterventionCooldownMinutes(batchData, DEFAULT_NOTIFICATION_COOLDOWN_MINUTES);
+    const notifElapsedMins = (Date.now() - lastNotifAt) / (1000 * 60);
 
-  // Fallback handler for permission denial or API failure
-  const handleFallback = async (status, reason) => {
-    await updateBadge({ ...intervention, friction_type: intervention.friction_type || "SOFT_WARNING" });
-    const overlayEligible = !!intervention.should_overlay;
-
-    await recordDeliveryTrace({
-      decision_id: decisionId,
-      session_id: sessionId,
-      episode_id: episodeId,
-      user_id: "local_user",
-      domain,
-      channel: "notification",
-      requested_channel: "notification",
-      fallback_channel: overlayEligible ? "badge_popup_overlay" : "badge_popup",
-      intervention_preserved: true,
-      should_notify: true,
-      should_overlay: overlayEligible,
-      eligible: true,
-      attempted_at_utc: attemptedAt,
-      delivery_status: status,
-      chrome_notification_id: null,
-      failure_reason: reason
-    });
-
-    const updatedIntervention = {
-      ...intervention,
-      delivery_status: status,
-      failure_reason: reason,
-      fallback_channel: overlayEligible ? "badge_popup_overlay" : "badge_popup",
-      intervention_preserved: true
-    };
-    await chrome.storage.local.set({ latestIntervention: updatedIntervention });
-  };
-
-  if (typeof chrome === "undefined" || !chrome.notifications) {
-    await handleFallback("PERMISSION_DENIED", "chrome.notifications API missing or permission denied");
-    return;
-  }
-
-  const timer = intervention.recommended_remaining || intervention.recommended_timer_minutes;
-  const status = intervention.usage_status || "Usage alert";
-  let message = intervention.message || "HabitGuard recommends taking a short break.";
-  if (timer !== null && timer !== undefined) {
-    message = `${message} Suggested timer: ${timer} min.`;
-  }
-
-  const notifId = `hg_notif_${Date.now()}`;
-
-  // Log ATTEMPTED
-  await recordDeliveryTrace({
-    decision_id: decisionId,
-    session_id: sessionId,
-    episode_id: episodeId,
-    user_id: "local_user",
-    domain,
-    channel: "notification",
-    requested_channel: "notification",
-    fallback_channel: null,
-    intervention_preserved: true,
-    should_notify: true,
-    should_overlay: false,
-    eligible: true,
-    attempted_at_utc: attemptedAt,
-    delivery_status: "ATTEMPTED",
-    chrome_notification_id: notifId,
-    failure_reason: null
-  });
-
-  try {
-    chrome.notifications.create(notifId, {
-      type: "basic",
-      iconUrl: "icon128.png",
-      title: `HabitGuard: ${status}`,
-      message,
-      priority: 2
-    }, async (createdId) => {
-      if (chrome.runtime.lastError) {
-        await handleFallback("FAILED", chrome.runtime.lastError.message);
-      } else {
-        const nextEligibleIso = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    if (notifElapsedMins < notifCooldownMins) {
+      await recordDeliveryTrace({
+        decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+        user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
+        fallback_channel: "badge_popup", intervention_preserved: true, should_notify: true,
+        should_overlay: false, eligible: false, attempted_at_utc: attemptedAt,
+        delivery_status: "SUPPRESSED", failure_reason: "notification_cooldown_active"
+      });
+    } else {
+      if (typeof chrome !== "undefined" && chrome.notifications) {
+        const notifId = `hg_notif_${Date.now()}`;
         await recordDeliveryTrace({
-          decision_id: decisionId,
-          session_id: sessionId,
-          episode_id: episodeId,
-          user_id: "local_user",
-          domain,
-          channel: "notification",
-          requested_channel: "notification",
-          fallback_channel: null,
-          intervention_preserved: true,
-          should_notify: true,
-          should_overlay: false,
-          eligible: true,
-          attempted_at_utc: attemptedAt,
-          delivery_status: "API_ACCEPTED",
-          chrome_notification_id: createdId || notifId,
-          failure_reason: null,
-          cooldown_source: "VERSIONED_DEFAULT",
-          next_eligible_at: nextEligibleIso
+          decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+          user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
+          fallback_channel: null, intervention_preserved: true, should_notify: true,
+          should_overlay: false, eligible: true, attempted_at_utc: attemptedAt,
+          delivery_status: "ATTEMPTED", chrome_notification_id: notifId
         });
 
-        await chrome.storage.local.set({
-          lastNotificationAt: Date.now(),
-          latestIntervention: {
-            ...intervention,
-            delivery_status: "API_ACCEPTED",
-            last_notification_accepted_at: new Date().toISOString(),
-            next_eligible_at: nextEligibleIso
+        try {
+          const statusText = batchData.usage_status || "Usage Alert";
+          const timerVal = batchData.recommended_remaining || batchData.recommended_timer_minutes;
+          let msgText = batchData.message || "HabitGuard recommends taking a short break.";
+          if (timerVal !== null && timerVal !== undefined) {
+            msgText = `${msgText} Suggested timer: ${timerVal} min.`;
           }
+
+          chrome.notifications.create(notifId, {
+            type: "basic", iconUrl: "icon128.png", title: `HabitGuard: ${statusText}`,
+            message: msgText, priority: 2
+          }, async (createdId) => {
+            if (chrome.runtime.lastError) {
+              await recordDeliveryTrace({
+                decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+                user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
+                fallback_channel: "badge_popup", intervention_preserved: true, should_notify: true,
+                should_overlay: false, eligible: true, attempted_at_utc: attemptedAt,
+                delivery_status: "PERMISSION_DENIED", failure_reason: chrome.runtime.lastError.message
+              });
+            } else {
+              await chrome.storage.local.set({ lastNotificationAt: Date.now() });
+              await recordDeliveryTrace({
+                decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+                user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
+                fallback_channel: null, intervention_preserved: true, should_notify: true,
+                should_overlay: false, eligible: true, attempted_at_utc: attemptedAt,
+                delivery_status: "API_ACCEPTED", chrome_notification_id: createdId || notifId
+              });
+            }
+          });
+        } catch (err) {
+          await recordDeliveryTrace({
+            decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+            user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
+            fallback_channel: "badge_popup", intervention_preserved: true, should_notify: true,
+            should_overlay: false, eligible: true, attempted_at_utc: attemptedAt,
+            delivery_status: "FAILED", failure_reason: String(err)
+          });
+        }
+      } else {
+        await recordDeliveryTrace({
+          decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+          user_id: "local_user", domain, channel: "notification", requested_channel: "notification",
+          fallback_channel: "badge_popup", intervention_preserved: true, should_notify: true,
+          should_overlay: false, eligible: true, attempted_at_utc: attemptedAt,
+          delivery_status: "PERMISSION_DENIED", failure_reason: "chrome.notifications API missing"
         });
       }
-    });
-  } catch (err) {
-    await handleFallback("FAILED", String(err));
+    }
   }
+
+  // 6. Handle Overlay Delivery if independently eligible
+  if (batchData.should_overlay) {
+    const lastOverlayAt = stored.lastOverlayAt || 0;
+    const overlayCooldownMins = getInterventionCooldownMinutes(batchData, 15);
+    const overlayElapsedMins = (Date.now() - lastOverlayAt) / (1000 * 60);
+
+    if (overlayElapsedMins < overlayCooldownMins) {
+      await recordDeliveryTrace({
+        decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+        user_id: "local_user", domain, channel: "overlay", requested_channel: "overlay",
+        fallback_channel: "badge_popup", intervention_preserved: true, should_notify: false,
+        should_overlay: true, eligible: false, attempted_at_utc: attemptedAt,
+        delivery_status: "SUPPRESSED", failure_reason: "overlay_cooldown_active"
+      });
+    } else {
+      const activeTab = await getActiveTab();
+      if (activeTab && activeTab.url && isTrackableUrl(activeTab.url)) {
+        const activeTabDomain = getDomain(activeTab.url);
+        if (activeTabDomain === domain) {
+          try {
+            await chrome.tabs.sendMessage(activeTab.id, {
+              type: "SHOW_HABITGUARD_OVERLAY",
+              payload: {
+                domain,
+                category: currentSession?.category || batchData.current_category || "neutral",
+                sessionMinutes: batchData.focused_minutes || currentSession?.sessionMinutes || 0,
+                timerMinutes: batchData.recommended_remaining || batchData.recommended_timer_minutes || null,
+                frictionType: batchData.friction_type,
+                message: batchData.message
+              }
+            });
+            await chrome.storage.local.set({ lastOverlayAt: Date.now() });
+            await recordDeliveryTrace({
+              decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+              user_id: "local_user", domain, channel: "overlay", requested_channel: "overlay",
+              fallback_channel: null, intervention_preserved: true, should_notify: false,
+              should_overlay: true, eligible: true, attempted_at_utc: attemptedAt,
+              delivery_status: "API_ACCEPTED"
+            });
+          } catch (err) {
+            await recordDeliveryTrace({
+              decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+              user_id: "local_user", domain, channel: "overlay", requested_channel: "overlay",
+              fallback_channel: "badge_popup", intervention_preserved: true, should_notify: false,
+              should_overlay: true, eligible: true, attempted_at_utc: attemptedAt,
+              delivery_status: "FAILED", failure_reason: String(err)
+            });
+          }
+        } else {
+          await recordDeliveryTrace({
+            decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+            user_id: "local_user", domain, channel: "overlay", requested_channel: "overlay",
+            fallback_channel: "badge_popup", intervention_preserved: true, should_notify: false,
+            should_overlay: true, eligible: false, attempted_at_utc: attemptedAt,
+            delivery_status: "SUPPRESSED", failure_reason: "active_tab_domain_mismatch"
+          });
+        }
+      } else {
+        await recordDeliveryTrace({
+          decision_id: decisionId, session_id: sessionId, episode_id: episodeId,
+          user_id: "local_user", domain, channel: "overlay", requested_channel: "overlay",
+          fallback_channel: "badge_popup", intervention_preserved: true, should_notify: false,
+          should_overlay: true, eligible: false, attempted_at_utc: attemptedAt,
+          delivery_status: "SUPPRESSED", failure_reason: "no_trackable_active_tab"
+        });
+      }
+    }
+  }
+}
+
+async function showInterventionNotification(intervention) {
+  await consumeCanonicalDecision(intervention, "manual");
 }
 
 async function updateBadge(intervention) {
@@ -871,19 +906,16 @@ async function runJitaiCheck() {
 
     if (currentSession && currentSession.session_id) {
       const apiBase = await getApiBaseUrl();
+      const currentCategory = currentSession.category || "neutral";
       const res = await fetch(`${apiBase}/sessions/${currentSession.session_id}/activity/batch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ activities: [] })
+        body: JSON.stringify({ activities: [], current_category: currentCategory })
       });
       if (res.ok) {
         const intervention = await parseApiResponse(res);
-        await chrome.storage.local.set({
-          latestIntervention: intervention,
-          latestInterventionCheckedAt: Date.now()
-        });
+        await consumeCanonicalDecision(intervention, "jitai_check");
         await sendUsageSnapshot(intervention, { source: "chrome_extension_jitai_check" });
-        await updateBadge(intervention);
       }
     }
 
@@ -991,10 +1023,38 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
-  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
-    await reconcileActiveSession("window_focused");
+  if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    const { currentSession } = await getStoredUsage();
+    if (currentSession && currentSession.session_id) {
+      await notifySessionUnfocused(currentSession.session_id);
+    }
+  } else {
+    try {
+      const win = await chrome.windows.get(windowId);
+      if (win.state === "minimized") {
+        const { currentSession } = await getStoredUsage();
+        if (currentSession && currentSession.session_id) {
+          await notifySessionUnfocused(currentSession.session_id);
+        }
+      } else {
+        await reconcileActiveSession("window_focused");
+      }
+    } catch {
+      await reconcileActiveSession("window_focused");
+    }
   }
 });
+
+if (typeof chrome !== "undefined" && chrome.idle && chrome.idle.onStateChanged) {
+  chrome.idle.onStateChanged.addListener(async (newState) => {
+    if (newState === "idle" || newState === "locked") {
+      const { currentSession } = await getStoredUsage();
+      if (currentSession && currentSession.session_id) {
+        await notifySessionUnfocused(currentSession.session_id);
+      }
+    }
+  });
+}
 
 chrome.runtime.onInstalled.addListener(() => { startAlarms(); });
 chrome.runtime.onStartup.addListener(() => { startAlarms(); });

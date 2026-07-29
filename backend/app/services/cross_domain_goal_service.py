@@ -78,6 +78,9 @@ class CrossDomainGoalService:
         total_necessary = sum(float(r.get("necessary_minutes", 0)) for r in rollups)
         sample_count    = len(rollups)
 
+        distinct_days = len(set(r["local_date"] for r in rollups if r.get("local_date")))
+        days_measured = max(1, distinct_days)
+
         # Fetch user's reduction goal
         goal = self.goals_repo.get_goal(user_id) if self.goals_repo else None
         reduction_pct: float = float(
@@ -90,6 +93,7 @@ class CrossDomainGoalService:
             total_necessary=total_necessary,
             reduction_pct=reduction_pct,
             sample_count=sample_count,
+            distinct_days=days_measured,
             focused_minutes_used_today=focused_minutes_used_today,
         )
 
@@ -106,8 +110,7 @@ class CrossDomainGoalService:
             domain_totals[d] = round(domain_totals.get(d, 0.0) + float(r.get("focused_minutes", 0)), 2)
 
         # Personalised goal (distracting only)
-        days_estimate = max(1, sample_count // 3)
-        avg_daily_focused = total_focused / days_estimate
+        avg_daily_focused = max(0.0, total_focused - total_necessary) / days_measured
         personalized_goal_minutes = round(
             avg_daily_focused * (1.0 - reduction_pct / 100.0) * days, 2
         )
@@ -115,7 +118,7 @@ class CrossDomainGoalService:
 
         return {
             # Usage breakdown
-            "total_distracting_minutes":  round(total_focused,   2),
+            "total_distracting_minutes":  round(total_focused - total_necessary, 2),
             "planned_minutes":            round(total_planned,   2),
             "unplanned_minutes":          round(total_unplanned, 2),
             "unknown_minutes":            round(total_unknown,   2),
@@ -128,6 +131,7 @@ class CrossDomainGoalService:
             "allowance_source":                    allowance_result["source"],
             "allowance_confidence":                allowance_result["confidence"],
             "allowance_sample_count":              sample_count,
+            "allowance_distinct_days":             days_measured,
             "allowance_configuration_version":     CONFIG_VERSION,
             # Substitution
             "site_substitution_status":  substitution["status"],
@@ -151,6 +155,7 @@ class CrossDomainGoalService:
         reduction_pct: float,
         sample_count: int,
         focused_minutes_used_today: float,
+        distinct_days: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Rules:
@@ -170,7 +175,7 @@ class CrossDomainGoalService:
 
         # Distracting baseline excludes protected minutes
         distracting_baseline = max(0.0, total_focused - total_necessary)
-        days_est = max(1, sample_count // 3)
+        days_est = max(1, distinct_days if distinct_days is not None else (sample_count // 3))
         avg_daily = distracting_baseline / days_est
 
         # Target = baseline * (1 - reduction%) minus what's already used today

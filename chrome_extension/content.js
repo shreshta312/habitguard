@@ -195,6 +195,16 @@ function formatHabitGuardTime(totalSeconds) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+function escapeHTML(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function createHabitGuardOverlay(payload) {
   removeHabitGuardOverlay();
 
@@ -226,14 +236,14 @@ function createHabitGuardOverlay(payload) {
       <h2>Pause for a moment</h2>
 
       <p class="habitguard-main-message">
-        ${payload.message || "Your usage is above your usual pattern."}
+        ${escapeHTML(payload.message || "Your usage is above your usual pattern.")}
       </p>
 
       <div class="habitguard-details">
-        <p><strong>Current site:</strong> ${payload.domain || "this site"}</p>
-        <p><strong>Category:</strong> ${payload.category || "temptation"}</p>
-        <p><strong>Session:</strong> ${payload.sessionMinutes || 0} min</p>
-        <p><strong>Recommended timer:</strong> ${payload.timerMinutes || "Not active"} min</p>
+        <p><strong>Current site:</strong> ${escapeHTML(payload.domain || "this site")}</p>
+        <p><strong>Category:</strong> ${escapeHTML(payload.category || "temptation")}</p>
+        <p><strong>Session:</strong> ${escapeHTML(payload.sessionMinutes || 0)} min</p>
+        <p><strong>Recommended timer:</strong> ${escapeHTML(payload.timerMinutes || "Not active")} min</p>
       </div>
 
       ${hardFrictionHTML}
@@ -444,26 +454,20 @@ function createHabitGuardOverlay(payload) {
 
 function sendHabitGuardFeedback(eventType, payload = {}) {
   try {
+    const cleanDomain = payload.domain || window.location.hostname.replace(/^www\./, "");
     chrome.runtime.sendMessage({
       type: "HABITGUARD_FEEDBACK_EVENT",
       eventType: eventType,
       payload: {
         user_id: "local_user",
-
-        site: payload.domain || window.location.hostname.replace("www.", ""),
+        site: cleanDomain,
         category: payload.category || "unknown",
         overlay_id: payload.overlay_id || HABITGUARD_OVERLAY_ID,
-
         decision: payload.decision || null,
         reason: payload.reason || null,
-
         context: {
-          page_origin: window.location.origin,
-          page_title: document.title,
           session_minutes: payload.sessionMinutes || 0,
-          timer_minutes: payload.timerMinutes || null,
-          message: payload.message || null,
-          original_payload: payload
+          timer_minutes: payload.timerMinutes || null
         }
       }
     });

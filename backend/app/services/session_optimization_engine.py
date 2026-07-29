@@ -126,13 +126,10 @@ class SessionOptimizationEngine:
                 else:
                     plan_dev = math.pow((curr_x - contextual_baseline) / (contextual_baseline + 1e-5), 2)
 
-                goal_dev = max(0.0, curr_x - cross_domain_allowance) / 60.0
-
                 J = (
                     self.alpha * usage_cost +
                     self.beta * temptation_estimate * usage_cost +
-                    self.lambda_dev * plan_dev +
-                    self.gamma_goal * goal_dev
+                    self.lambda_dev * plan_dev
                 )
 
                 if J < best_obj:
@@ -165,12 +162,11 @@ class SessionOptimizationEngine:
             best_plan_dev = math.pow((best_x - planned_minutes) / (planned_minutes + 1e-5), 2)
         else:
             best_plan_dev = math.pow((best_x - contextual_baseline) / (contextual_baseline + 1e-5), 2)
-        best_goal_dev = max(0.0, best_x - cross_domain_allowance) / 60.0
 
         comp_usage = round(self.alpha * best_usage_cost, 4)
         comp_temptation = round(self.beta * temptation_estimate * best_usage_cost, 4)
         comp_plan_dev = round(self.lambda_dev * best_plan_dev, 4)
-        comp_goal_dev = round(self.gamma_goal * best_goal_dev, 4)
+        comp_goal_dev = 0.0  # Reduction goal enforced via binding constraint x <= cross_domain_allowance
 
         return self._build_result(
             input_snapshot,

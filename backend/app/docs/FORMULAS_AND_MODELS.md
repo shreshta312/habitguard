@@ -51,26 +51,24 @@ Every formula in HabitGuard is categorized into one of four explicit classificat
 - **Classification Tag**: `ACTIVE_CANONICAL`
 - **Formula ID**: `FORMULA_SESSION_OPTIMIZATION_GRID`
 - **Objective Function**:
-  $$J(x) = \alpha \cdot U_{\text{cost}}(x) + \beta \cdot T_{\text{estimate}} \cdot U_{\text{cost}}(x) + \lambda \cdot D_{\text{plan}}(x) + \gamma \cdot G_{\text{goal}}(x)$$
+  $$J(x) = \alpha \cdot U_{\text{cost}}(x) + \beta \cdot T_{\text{estimate}} \cdot U_{\text{cost}}(x) + \lambda \cdot D_{\text{plan}}(x)$$
   where:
-  - $U_{\text{cost}}(x) = \frac{x}{60}$ (usage duration in hours, range $[0.0, 8.0]$)
+  - $U_{\text{cost}}(x) = \frac{x}{60}$ (usage duration in hours, range $[0.0, 3.0]$)
   - $T_{\text{estimate}} \in [0.0, 1.0]$ (temptation score, range $[0.0, 1.0]$)
   - $D_{\text{plan}}(x) = \left(\frac{x - P_{\text{effective}}}{P_{\text{effective}} + 1e-5}\right)^2$ (plan deviation, range $[0.0, \infty)$)
-  - $G_{\text{goal}}(x) = \frac{\max(0.0, x - C_{\text{allowance}})}{60}$ (cross-domain goal overrun in hours, range $[0.0, \infty)$)
-- **Feasibility Constraint**: $U(x) \ge U_{\text{min}} = 0.35$ and $x \ge \max(0.0, u_{\text{used}}, \text{necessary\_minimum})$.
+- **Feasibility Constraint**: $x \in [\max(u_{\text{used}}, \text{necessary\_minimum}), \min(\text{safe\_max}, \text{contextual\_baseline}, C_{\text{allowance}})]$.
+- **Note**: The cross-domain reduction goal is enforced as a binding hard upper constraint $x \le C_{\text{allowance}}$, which guarantees zero goal deviation in candidate evaluation and removes redundant penalty terms ($\kappa, \gamma$) from $J(x)$.
 - **Objective Component Breakdown (Exposed on every run)**:
   - `usage_cost_contribution`: $\alpha \cdot \frac{x}{60}$
   - `temptation_cost_contribution`: $\beta \cdot T_{\text{estimate}} \cdot \frac{x}{60}$
   - `plan_deviation_contribution`: $\lambda \cdot D_{\text{plan}}(x)$
-  - `goal_deviation_contribution`: $\gamma \cdot G_{\text{goal}}(x)$
 - **Coefficients & Provenance**:
   - $\alpha = 0.25$ (`VERSIONED_DEFAULT`)
   - $\beta = 0.30$ (`VERSIONED_DEFAULT`)
   - $\lambda = 0.20$ (`VERSIONED_DEFAULT`)
-  - $\gamma = 0.15$ (`VERSIONED_DEFAULT`)
   - $U_{\text{min}} = 0.35$ (`VERSIONED_DEFAULT` from `SYSTEM_PARAMETERS["utility_parameters"]`)
 - **Active Call Sites**: `backend/app/services/session_optimization_engine.py:solve`.
-- **Tests**: `backend/tests/test_target_ratcheting.py`, `backend/tests/test_temptation_objective_verification.py`.
+- **Tests**: `backend/tests/test_target_ratcheting.py`, `backend/tests/test_temptation_objective_verification.py`, `backend/tests/test_legacy_labels_and_math.py`.
 
 ---
 
