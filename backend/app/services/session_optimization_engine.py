@@ -107,8 +107,13 @@ class SessionOptimizationEngine:
 
         curr_x = lower_bound
         while curr_x <= upper_bound + 1e-5:
-            # Check utility constraint
-            necessity_scale = 1.0 if purpose in {"work_study", "necessary"} else 0.3
+            if purpose in {"work_study", "necessary"}:
+                necessity_scale = 1.0
+            elif purpose == "entertainment":
+                necessity_scale = 0.3
+            else:
+                necessity_scale = 0.1
+
             u_x = self.utility_estimator.calculate_utility(
                 x=curr_x,
                 planned_minutes=planned_minutes,

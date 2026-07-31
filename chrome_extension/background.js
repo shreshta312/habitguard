@@ -322,7 +322,7 @@ async function _doReconcileActiveSession(reason) {
         sessionMinutes: 0,
         episodeFocusedMinutes: data.episode_focused_minutes || 0,
         intentPurpose: data.intent?.purpose || "unknown",
-        intendedMinutes: data.intent?.intended_minutes || null
+        intendedMinutes: data.intent?.effective_planned_minutes ?? data.intent?.original_intended_minutes ?? data.intent?.intended_minutes ?? null
       };
 
       await chrome.storage.local.set({

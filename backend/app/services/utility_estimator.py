@@ -68,7 +68,7 @@ class UtilityEstimator:
         U(x) = necessity_scale * log(1 + x) + completion_weight * C_hat(x) - penalty * max(0, planned - x)^2
         """
         c_hat = self.predict_completion_probability(x, necessary_minimum)
-        term1 = necessity_scale * math.log(1.0 + x)
+        term1 = self.necessity_w * necessity_scale * math.log(1.0 + x)
         term2 = self.completion_w * c_hat
         
         if planned_minutes and x < planned_minutes:

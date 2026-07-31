@@ -38,6 +38,7 @@ class SessionIntentService:
         )
 
         tech_session["intent"] = episode
+        tech_session["episode_focused_minutes"] = self.repo.get_episode_focused_minutes(episode["episode_id"])
         return tech_session
 
     def update_intent(

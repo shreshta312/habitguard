@@ -16,7 +16,8 @@ class BehaviorFeatureService:
         uninterrupted_minutes: float = 0.0,
         cross_domain_switches: int = 0,
         historical_overrun_rate: float = 0.0,
-        feedback_summary: Dict[str, Any] | None = None
+        feedback_summary: Dict[str, Any] | None = None,
+        habit_stock_score: float = 0.0
     ) -> Dict[str, float]:
 
         # Plan overrun ratio normalized
@@ -45,6 +46,9 @@ class BehaviorFeatureService:
         # Historical overrun rate clamp
         hist_overrun_norm = clamp(historical_overrun_rate)
 
+        # Habit stock score normalized (scale: score 40+ = 1.0)
+        habit_stock_norm = clamp(habit_stock_score / 40.0)
+
         # Severity estimate in [0, 1]
         severity = clamp(
             0.4 * overrun_ratio +
@@ -66,6 +70,7 @@ class BehaviorFeatureService:
             "rapid_switching": round(switching_norm, 4),
             "context_signal": context_signal,
             "historical_overrun_rate": round(hist_overrun_norm, 4),
+            "habit_stock": round(habit_stock_norm, 4),
             "severity": round(severity, 4),
             "acceptance_rate": round(acceptance_rate, 4),
             "tracking_reliability": 1.0

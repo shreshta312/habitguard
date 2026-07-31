@@ -75,6 +75,8 @@ from app.services.feedback_service import FeedbackService
 from app.services.personal_adaptation_service import PersonalAdaptationService
 from app.services.outcome_evaluation_service import OutcomeEvaluationService
 from app.services.structural_timer_engine import StructuralTimerEngine
+from app.services.addiction_engine import AddictionEngine
+from app.services.dynamic_limit_engine import DynamicLimitEngine
 from app.services.habitguard_service import HabitGuardService
 
 from app.api.feedback import router as feedback_router
@@ -125,6 +127,18 @@ adaptation_service = PersonalAdaptationService(params_repo)
 feedback_service = FeedbackService(feedback_repo, adaptation_service)
 outcome_evaluator = OutcomeEvaluationService()
 structural_timer_engine = StructuralTimerEngine()
+addiction_engine = AddictionEngine()
+limit_engine = DynamicLimitEngine()
+
+def get_daily_usage_history_from_rollups(user_id: str, days: int = 14) -> List[float]:
+    rollups = rollups_repo.get_user_rollups(user_id, days=days)
+    daily_totals = {}
+    for r in rollups:
+        d = r.get("local_date")
+        if d:
+            daily_totals[d] = daily_totals.get(d, 0.0) + float(r.get("focused_minutes", 0.0))
+    sorted_dates = sorted(daily_totals.keys())
+    return [daily_totals[d] for d in sorted_dates]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CSV_PATH = PROJECT_ROOT / "data" / "processed" / "cleaned_screen_time.csv"
@@ -542,6 +556,21 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
     )
     focused_minutes_used_today = max(today_distracting, episode_focused_mins)
 
+    # ── Dead Code / ML Integration Layer ──
+    # 1. Fetch user daily history from SQLite rollups
+    daily_history = get_daily_usage_history_from_rollups(user_id, days=14)
+    # Ensure we have at least today's active usage
+    if not daily_history:
+        daily_history = [focused_minutes_used_today]
+
+    # 2. Compute current addiction score and recommended limit
+    current_addiction_score = addiction_engine.current_score(daily_history)
+    addiction_level = addiction_engine.score_level(current_addiction_score)
+    recommended_daily_limit = limit_engine.recommend_limit(current_addiction_score)
+
+    # 3. Calculate structural timer using paper's models
+    structural_summary = structural_timer_engine.get_structural_timer_summary(daily_history)
+
     cross_domain_ctx = cross_domain_service.get_cross_domain_context(
         user_id=user_id,
         current_domain=domain,
@@ -549,6 +578,10 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
         focused_minutes_used_today=focused_minutes_used_today,
     )
     cross_domain_allowance = cross_domain_ctx["cross_domain_allowance_minutes"]
+
+    # 4. Cap the cross-domain allowance by the remaining recommended limit from DynamicLimitEngine
+    dynamic_limit_remaining = max(0.0, recommended_daily_limit - focused_minutes_used_today)
+    cross_domain_allowance = min(cross_domain_allowance, dynamic_limit_remaining)
 
     # Phase 3: Derived real behavioral features
     reopen_cnt = sessions_repo.get_reopen_count(episode_id)
@@ -564,7 +597,8 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
         uninterrupted_minutes=focused_mins,
         cross_domain_switches=cross_switches,
         historical_overrun_rate=hist_overrun_rate,
-        feedback_summary=feedback_sum
+        feedback_summary=feedback_sum,
+        habit_stock_score=current_addiction_score
     )
 
     tempt_res = temptation_estimator.estimate(features, purpose=purpose)
@@ -608,7 +642,6 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
     opt_res["derivation"]["effective_planned_minutes"] = effective_planned_mins
     opt_res["parameter_sources"]["cross_domain_allowance"] = cross_domain_ctx["allowance_source"]
 
-    opt_repo.record_run(opt_res)
 
     if effective_planned_mins is None or effective_planned_mins <= 0:
         session_status = "NO_PLAN"
@@ -658,6 +691,10 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
         dec_res["should_overlay"] = False
         dec_res["suppression_reason"] = "stop_reminders"
         dec_res["friction_type"] = "NONE"
+
+    opt_res.setdefault("derivation", {})
+    opt_res["derivation"]["decision_result"] = dec_res
+    opt_repo.record_run(opt_res)
 
     sessions_repo.update_session_outcome(
         session_id=session_id,
@@ -731,6 +768,10 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
         "is_optimized_target":            is_optimized,
         "cross_domain_allowance":         cross_domain_allowance,
         "substitution_status":            cross_domain_ctx["site_substitution_status"],
+        "addiction_score":                round(current_addiction_score, 2),
+        "addiction_level":                addiction_level,
+        "recommended_daily_limit":        recommended_daily_limit,
+        "structural_timer_summary":       structural_summary,
     }
 
 @app.post("/sessions/{session_id}/action")
@@ -740,7 +781,8 @@ def record_session_action(session_id: str, req: ActionRequest):
         raise HTTPException(status_code=404, detail="Session not found")
 
     user_id      = session["user_id"]
-    actual_mins  = usage_tracker.calculate_focused_minutes(session_id)
+    episode_id   = session.get("episode_id")
+    actual_mins  = sessions_repo.get_episode_focused_minutes(episode_id) if episode_id else usage_tracker.calculate_focused_minutes(session_id)
 
     if req.action == "extend_5":
         sessions_repo.add_extension_minutes(session_id, 5.0)
@@ -852,6 +894,11 @@ def get_debug_health():
         "runtime_database_path": str(DB_PATH),
         "canonical_pipeline_version": "2.0.0"
     }
+
+@app.get("/diagnostics")
+def get_model_diagnostics():
+    from app.services.diagnostics_service import get_diagnostics
+    return get_diagnostics()
 
 @app.get("/dashboard/{user_id}/summary")
 def get_user_summary(user_id: str, local_tz: str = "UTC"):
@@ -996,32 +1043,27 @@ def get_user_current_runtime_state(user_id: str):
                 "remaining_minutes": round(max(0.0, eff_planned - ep_focused_mins), 2) if eff_planned is not None else None
             }
 
-        # Defect 4 (tightened): query optimization_runs by exact current session_id only.
-        # Never use an episode-level OR subquery that could pull in runs from other sessions.
-        # session_id, episode_id, and domain must all match exactly.
+        # Defect 4 (tightened): use opt_repo.get_latest_run which uses exact current session_id
         latest_intervention = None
         if current_session and current_sid:
-            cur.execute(
-                """SELECT o.session_id, o.user_id, o.optimized_target, o.recommended_remaining,
-                          o.solver_status, o.created_at_utc,
-                          t.episode_id AS opt_episode_id, t.domain AS opt_domain
-                   FROM optimization_runs o
-                   JOIN technical_sessions t ON o.session_id = t.session_id
-                   WHERE o.user_id = ? AND o.session_id = ?
-                   ORDER BY o.rowid DESC LIMIT 1""",
-                (user_id, current_sid)
-            )
-            opt_row = cur.fetchone()
-            if opt_row:
-                opt_dict = dict(opt_row)
-                opt_epid = opt_dict.get("opt_episode_id")
-                opt_domain = opt_dict.get("opt_domain")
-                # Strict identity: all three dimensions must match
-                matches_session = (opt_dict.get("session_id") == current_sid)
-                matches_episode = (opt_epid is None or current_epid is None or opt_epid == current_epid)
-                matches_domain = (opt_domain == current_domain)
-                if matches_session and matches_episode and matches_domain:
-                    latest_intervention = opt_dict
+            latest_opt = opt_repo.get_latest_run(current_sid)
+            if latest_opt:
+                dec_res = latest_opt.get("derivation", {}).get("decision_result")
+                if dec_res:
+                    latest_intervention = dec_res
+                    latest_intervention["session_id"] = latest_opt.get("session_id")
+                    latest_intervention["optimized_target"] = latest_opt.get("optimized_target")
+                    latest_intervention["recommended_remaining"] = latest_opt.get("recommended_remaining")
+                    latest_intervention["solver_status"] = latest_opt.get("solver_status")
+                    latest_intervention["created_at_utc"] = latest_opt.get("created_at_utc")
+                else:
+                    latest_intervention = {
+                        "session_id": latest_opt.get("session_id"),
+                        "optimized_target": latest_opt.get("optimized_target"),
+                        "recommended_remaining": latest_opt.get("recommended_remaining"),
+                        "solver_status": latest_opt.get("solver_status"),
+                        "created_at_utc": latest_opt.get("created_at_utc")
+                    }
 
         if current_session is None:
             return {

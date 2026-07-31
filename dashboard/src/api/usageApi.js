@@ -26,12 +26,13 @@ export async function fetchCanonicalUserDashboard(userId = "local_user") {
       : "UTC";
   const tzParam = encodeURIComponent(browserTimezone);
 
-  const [summaryRes, historyRes, platformsRes, goalRes, currentRes] = await Promise.all([
+  const [summaryRes, historyRes, platformsRes, goalRes, currentRes, mlRes] = await Promise.all([
     fetch(`${API_BASE_URL}/dashboard/${userId}/summary?local_tz=${tzParam}`),
     fetch(`${API_BASE_URL}/dashboard/${userId}/history?days=7&local_tz=${tzParam}`),
     fetch(`${API_BASE_URL}/dashboard/${userId}/platforms?local_tz=${tzParam}`),
     fetch(`${API_BASE_URL}/dashboard/${userId}/goal`),
-    fetch(`${API_BASE_URL}/dashboard/${userId}/current`).catch(() => null)
+    fetch(`${API_BASE_URL}/dashboard/${userId}/current`).catch(() => null),
+    fetch(`${API_BASE_URL}/usage/summary/${userId}`).catch(() => null)
   ]);
 
   const summary = await readJsonResponse(summaryRes);
@@ -39,6 +40,7 @@ export async function fetchCanonicalUserDashboard(userId = "local_user") {
   const platformsData = await readJsonResponse(platformsRes);
   const goal = await readJsonResponse(goalRes);
   const currentData = currentRes ? await readJsonResponse(currentRes).catch(() => null) : null;
+  const mlData = mlRes ? await readJsonResponse(mlRes).catch(() => null) : null;
 
   const history = historyData.history || [];
   const platforms = platformsData.platforms || {};
@@ -63,6 +65,7 @@ export async function fetchCanonicalUserDashboard(userId = "local_user") {
       platforms,
       goal,
       current: currentData,
+      ml: mlData,
       dashboard_ready: true
     },
     todayTotalMinutes: summary.active_usage_minutes || 0,
@@ -73,6 +76,8 @@ export async function fetchCanonicalUserDashboard(userId = "local_user") {
     topDomainsAllTime: topDomainsToday,
     currentSession: currentData?.current_session || null,
     latestIntervention: currentData?.latest_intervention || null,
+    anomaly: mlData?.anomaly || null,
+    forecast: mlData?.forecast || null,
     goal
   };
 }

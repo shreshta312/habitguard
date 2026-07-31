@@ -39,6 +39,10 @@ class TemptationEstimator:
         T_raw = w1*O + w2*R + w3*L + w4*H + w5*K + w6*W + w7*Q
         T_bounded = clamp(T_raw, 0.0, 1.0)
 
+        # Blend in the habit stock normalized value if present (Allcott paper connection)
+        habit_stock_norm = float(features.get("habit_stock", 0.0))
+        T_blended = clamp(0.85 * T_bounded + 0.15 * habit_stock_norm, 0.0, 1.0)
+
         # Missing intention or tracking unreliability lowers confidence
         tracking_rel = float(features.get("tracking_reliability", 1.0))
         missing_plan = 1 if features.get("plan_overrun_minutes") is None else 0
@@ -54,7 +58,7 @@ class TemptationEstimator:
             missing_signals.append("planned_duration")
 
         return {
-            "temptation_estimate": round(T_bounded, 4),
+            "temptation_estimate": round(T_blended, 4),
             "confidence": round(confidence, 4),
             "component_values": {
                 "overrun_term": round(w1 * O, 4),

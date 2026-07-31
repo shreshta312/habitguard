@@ -201,7 +201,14 @@ class SessionsRepository:
             row = cur.fetchone()
             if not row:
                 return None
-            return dict(row)
+            ep = dict(row)
+            orig_m = ep.get("original_intended_minutes")
+            ext_m = float(ep.get("extension_minutes") or 0.0)
+            if orig_m is not None and ep.get("timer_mode") != "no_timer":
+                ep["effective_planned_minutes"] = float(orig_m) + ext_m
+            else:
+                ep["effective_planned_minutes"] = None
+            return ep
         finally:
             conn.close()
 
@@ -218,7 +225,7 @@ class SessionsRepository:
                 if purpose and purpose in VALID_PURPOSES:
                     conn.execute("UPDATE intent_episodes SET purpose = ?, updated_at_utc = ? WHERE episode_id = ?", (purpose, now_utc, episode_id))
                 if intended_minutes is not None:
-                    conn.execute("UPDATE intent_episodes SET intended_minutes = ?, updated_at_utc = ? WHERE episode_id = ?", (intended_minutes, now_utc, episode_id))
+                    conn.execute("UPDATE intent_episodes SET intended_minutes = ?, original_intended_minutes = COALESCE(original_intended_minutes, ?), updated_at_utc = ? WHERE episode_id = ?", (intended_minutes, intended_minutes, now_utc, episode_id))
                 if timer_mode and timer_mode in VALID_TIMER_MODES:
                     conn.execute("UPDATE intent_episodes SET timer_mode = ?, updated_at_utc = ? WHERE episode_id = ?", (timer_mode, now_utc, episode_id))
             return self.get_intent_episode(episode_id)
