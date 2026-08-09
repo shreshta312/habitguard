@@ -502,9 +502,9 @@ export default function HabitGuardDashboard({ showDebug = false }) {
         {/* ── Stat Cards ── */}
         <section className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
           <StatCard icon={Clock} label="Screen Time" value={formatMinutes(liveUsage.screenTimeMinutes)} accent={accents.mint} />
-          <StatCard icon={TrendingUp} label="Overuse Gap" value={formatSignedMinutes(overuseGap)} accent={accents.mint} />
+          <StatCard icon={TrendingUp} label="Extra Screen Time" value={formatSignedMinutes(overuseGap)} accent={accents.mint} />
           <StatCard icon={Timer} label="Suggested Timer" value={formatMinutes(recommendedTimer, "Not active")} accent={accents.mint} />
-          <StatCard icon={Activity} label="Decision Checks" value={String(totalInterventions)} accent={accents.mint} />
+          <StatCard icon={Activity} label="Smart Reminders" value={String(totalInterventions)} accent={accents.mint} />
         </section>
 
         {/* ── Charts ── */}
@@ -543,8 +543,8 @@ export default function HabitGuardDashboard({ showDebug = false }) {
               <p className="max-w-2xl text-base leading-relaxed">
                 {!latestIntervention?.usage_status ? (
                   <>
-                    No intervention decision yet. Open the Chrome extension and
-                    click <strong>Analyze Usage</strong>, or wait for the automatic JITAI check.
+                    No check-in yet. Open the Chrome extension and
+                    click <strong>Analyze Usage</strong>, or browse for a few minutes.
                   </>
                 ) : overuseGap > 0 ? (
                   <>
@@ -560,7 +560,9 @@ export default function HabitGuardDashboard({ showDebug = false }) {
 
               <div className="hg-mono mt-4 flex flex-wrap items-center gap-3 text-sm" style={{ color: "var(--text-dim)" }}>
                 <span>
-                  Status: <strong style={{ color: "var(--text)" }}>{latestIntervention?.usage_status || "WAITING"}</strong>
+                  Status: <strong style={{ color: "var(--text)" }}>{
+                    ({ WAITING: "Waiting", NO_PLAN: "No timer set", OVER_PLAN: "Over your limit", WITHIN_LIMIT: "On track", OVER_LIMIT: "Over limit", CALIBRATING: "Calibrating", USER_OVERRIDE: "Paused", NO_TIMER: "No timer", TRACKING_UNRELIABLE: "Tracking adjusting" })[latestIntervention?.usage_status] || latestIntervention?.usage_status || "Waiting"
+                  }</strong>
                 </span>
                 <span>·</span>
                 <span>
@@ -585,7 +587,7 @@ export default function HabitGuardDashboard({ showDebug = false }) {
           </div>
 
           <div className="hg-card p-6">
-            <h3 className="hg-display mb-4 text-lg font-medium">Top domains today</h3>
+            <h3 className="hg-display mb-4 text-lg font-medium">Websites visited today</h3>
             {domainBreakdown.length === 0 ? (
               <p className="text-sm" style={{ color: "var(--text-dim)" }}>No domain data available yet.</p>
             ) : (
@@ -616,7 +618,7 @@ export default function HabitGuardDashboard({ showDebug = false }) {
         {showDebug && <DiagnosticsPanel />}
 
         <p className="hg-mono mt-8 text-center text-xs" style={{ color: "var(--text-dim)" }}>
-          HabitGuard · JITAI-based intervention · live backend dashboard
+          HabitGuard · AI-powered digital wellbeing assistant · live dashboard
         </p>
       </div>
     </div>

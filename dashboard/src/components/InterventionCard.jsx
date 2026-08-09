@@ -54,7 +54,7 @@ export default function InterventionCard({
 }) {
   return (
     <section className="hg-card mb-6 p-6 md:p-8">
-      <h3 className="hg-display mb-4 text-lg font-medium">Latest intervention</h3>
+      <h3 className="hg-display mb-4 text-lg font-medium">Latest Check-in</h3>
 
       {!latestIntervention?.usage_status ? (
         <p className="text-sm" style={{ color: "var(--text-dim)" }}>
@@ -71,7 +71,16 @@ export default function InterventionCard({
 
             {latestIntervention.decision_reason && (
               <p className="hg-mono mt-2 text-xs leading-relaxed" style={{ color: "var(--text-dim)" }}>
-                {latestIntervention.decision_reason}
+                {({
+                  "NO_PLAN_TIMER_NOT_SET": "No timer was set for this session.",
+                  "WITHIN_PLAN": "You are within your planned time.",
+                  "NEAR_PLAN": "You are approaching your planned time limit.",
+                  "OVER_PLAN": "You have gone over your planned time.",
+                  "STOP_REMINDERS": "Reminders paused for this session.",
+                  "USER_OVERRIDE": "You have overridden the recommendation.",
+                  "LOW_TEMPTATION": "Your usage pattern looks healthy right now.",
+                  "HIGH_TEMPTATION": "Your usage pattern suggests a check-in would help.",
+                })[latestIntervention.decision_reason] || latestIntervention.decision_reason}
               </p>
             )}
 
@@ -87,7 +96,7 @@ export default function InterventionCard({
               return (
                 <div className="mt-4 border-y py-3 space-y-2" style={{ borderColor: "var(--card-border)" }}>
                   <div className="flex justify-between text-xs" style={{ color: "var(--text-dim)" }}>
-                    <span>Limit Usage Tracker</span>
+                    <span>Daily Screen Time Progress</span>
                     <span className="font-semibold" style={{ color: isOverLimit ? accents.peach : "var(--text)" }}>
                       {recent} min / {baseline} min limit
                     </span>
@@ -119,21 +128,20 @@ export default function InterventionCard({
 
                   <div className="flex justify-between text-[11px]" style={{ color: "var(--text-dim)" }}>
                     <span>Recent: {recent} min</span>
-                    <span>Rho calibration: {latestIntervention.rho_user ?? "Not available"}</span>
-                    <span>Baseline: {baseline} min</span>
+                    <span>Personalised</span>
+                    <span>Usual limit: {baseline} min</span>
                   </div>
 
                   {isOverLimit && (
                     <p className="text-[11px] leading-snug mt-1" style={{ color: accents.peach }}>
-                      ⚠️ Overuse detected: You are {Math.round(recent - baseline)} min above your
-                      behavioral baseline target.
+                      ⚠️ Usage notice: You are {Math.round(recent - baseline)} min above your usual usage limit.
                     </p>
                   )}
                 </div>
               );
             })()}
 
-            {/* ── JITAI Delivery Policy ── */}
+            {/* ── Smart Reminder Policy ── */}
             <div
               className="mt-4 flex flex-wrap items-center gap-3 border-t pt-3 text-xs"
               style={{ borderColor: "var(--card-border)", color: "var(--text-dim)" }}
@@ -166,7 +174,7 @@ export default function InterventionCard({
                 <div className="flex items-center gap-1.5">
                   <Timer size={12} />
                   <span>
-                    Cooldown:{" "}
+                    Reminder pause:{" "}
                     <strong style={{ color: "var(--text)" }}>
                       {latestIntervention.cooldown_minutes} min
                     </strong>
@@ -190,7 +198,14 @@ export default function InterventionCard({
                 color: frictionAccent(accents, latestIntervention.friction_type),
               }}
             >
-              {latestIntervention.friction_type}
+              {
+                {
+                  "STRONG_FRICTION": "Strong Reminder",
+                  "TIMER_WARNING": "Timer Recommendation",
+                  "SOFT_WARNING": "Gentle Check-in",
+                  "NONE": "Normal"
+                }[latestIntervention.friction_type] || latestIntervention.friction_type
+              }
             </span>
           )}
         </div>

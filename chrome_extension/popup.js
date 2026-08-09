@@ -302,14 +302,24 @@ function renderResult(data, checkedAt = null) {
 
   const sessionStatus = data.session_status || "UNKNOWN";
   if (sessionStatus === "OVER_PLAN") {
-    usageStatusEl.textContent = "OVER PLAN";
+    usageStatusEl.textContent = "Beyond planned time";
   } else if (sessionStatus === "NO_PLAN") {
-    usageStatusEl.textContent = "NO PLAN";
+    usageStatusEl.textContent = "Tracking (no time limit)";
+  } else if (sessionStatus === "NEAR_PLAN") {
+    usageStatusEl.textContent = "Near planned time";
+  } else if (sessionStatus === "WITHIN_PLAN") {
+    usageStatusEl.textContent = "Within planned time";
   } else {
     usageStatusEl.textContent = sessionStatus;
   }
 
-  if (frictionTypeEl) frictionTypeEl.textContent = data.friction_type || "NONE";
+  const frictionLabels = {
+    "SOFT_WARNING": "Gentle Reminder",
+    "TIMER_WARNING": "Timer Recommendation",
+    "STRONG_FRICTION": "Strong Reminder",
+    "NONE": "Normal"
+  };
+  if (frictionTypeEl) frictionTypeEl.textContent = frictionLabels[data.friction_type] || data.friction_type || "Normal";
 
   const recRemaining = data.recommended_remaining ?? data.recommended_remaining_minutes ?? data.recommended_timer_minutes;
 
@@ -666,13 +676,17 @@ async function setSessionIntent() {
 
     if (response.ok) {
       await parseApiResponse(response);
-      const updatedSession = {
-        ...currentSession,
-        intentPurpose: rawPurpose,
-        intendedMinutes
-      };
-      await chrome.storage.local.set({ currentSession: updatedSession });
-      renderCurrentSession(updatedSession);
+      const latestStored = await chrome.storage.local.get(["currentSession"]);
+      const latestSess = latestStored.currentSession || currentSession;
+      if (latestSess.session_id === currentSession.session_id) {
+        const updatedSession = {
+          ...latestSess,
+          intentPurpose: rawPurpose,
+          intendedMinutes
+        };
+        await chrome.storage.local.set({ currentSession: updatedSession });
+        renderCurrentSession(updatedSession);
+      }
       const purposeLabel = PURPOSE_LABELS[rawPurpose] || rawPurpose || "Unknown";
       const label = intendedMinutes ? `${purposeLabel}, ${intendedMinutes} min` : purposeLabel;
       if (intentStatusEl) intentStatusEl.textContent = `✓ Intent set: ${label}`;

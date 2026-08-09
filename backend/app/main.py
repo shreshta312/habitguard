@@ -1183,18 +1183,7 @@ def get_research_outcomes(user_id: str):
         "cross_domain_context":   cross_domain_ctx,
         "effectiveness_caveat":   "Behavioral effectiveness requires baseline-vs-intervention data from real extension usage.",
     }
-    cross_domain_ctx = cross_domain_service.get_cross_domain_context(
-        user_id=user_id, current_domain="", days=30
-    )
-    return {
-        "user_id":              user_id,
-        "evaluation":           eval_res,
-        "targeted_reduction_pct": target_reduction_pct,
-        "total_focused_minutes":  round(total_focused, 2),
-        "total_unplanned_minutes": round(total_unplanned, 2),
-        "cross_domain_context":   cross_domain_ctx,
-        "effectiveness_caveat":   "Behavioral effectiveness requires baseline-vs-intervention data from real extension usage.",
-    }
+
 
 
 # ==========================================

@@ -3,8 +3,9 @@ import pandas as pd
 from pathlib import Path
 
 
-MODEL_PATH = Path("ml/saved_models/risk_classifier.pkl")
-FEATURE_PATH = Path("data/processed/addiction_ml_features.csv")
+BASE_DIR = Path(__file__).resolve().parents[3]
+MODEL_PATH = BASE_DIR / "ml" / "saved_models" / "risk_classifier.pkl"
+FEATURE_PATH = BASE_DIR / "data" / "processed" / "addiction_ml_features.csv"
 
 
 def load_model():

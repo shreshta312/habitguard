@@ -9,7 +9,7 @@ DEFAULT_DOMAIN_BASELINES = {
     "x.com": 20.0,
     "reddit.com": 30.0,
     "github.com": 90.0,
-    "stackover flow.com": 45.0,
+    "stackoverflow.com": 45.0,
     "wikipedia.org": 30.0
 }
 

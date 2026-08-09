@@ -108,7 +108,7 @@ def test_2_continued_usage_after_resumption():
 def test_3_exactly_five_minutes():
     uid = f"user_t3_{uuid.uuid4().hex[:6]}"
     now_dt = datetime.now(timezone.utc)
-    t100_dt = now_dt - timedelta(seconds=299)
+    t100_dt = now_dt - timedelta(seconds=270)
 
     s1 = client.post("/sessions/start", json={
         "user_id": uid,

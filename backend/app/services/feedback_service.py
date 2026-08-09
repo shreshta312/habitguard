@@ -105,6 +105,8 @@ class FeedbackService:
         total      = summary.get("total_events", 0)
         acceptance = summary.get("acceptance_rate", 0.5)
 
+        most_dismissed = self.repo.get_most_dismissed_sites(target_user)
+
         return {
             "total_events": total,
             "event_type_counts": {
@@ -115,7 +117,7 @@ class FeedbackService:
             "break_accepted_count":     summary.get("finish_count", 0) + summary.get("extend_count", 0),
             "break_acceptance_rate":    acceptance,
             "acceptance_rate":          acceptance,
-            "most_dismissed_sites":     [],
+            "most_dismissed_sites":     most_dismissed,
             "most_accepted_break_sites": [],
             "site_actions":             {},
         }

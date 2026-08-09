@@ -68,12 +68,12 @@ class DecisionEngine:
         session_minutes = context.get("session_minutes", 0)
         planned_minutes = context.get("planned_minutes") if context.get("planned_minutes") is not None else timer_result.get("planned_minutes")
 
-        # Determine session_status
+        # Determine session_status with robust float boundary logic
         if planned_minutes is None or planned_minutes <= 0:
             session_status = "NO_PLAN"
         elif session_minutes > planned_minutes:
             session_status = "OVER_PLAN"
-        elif session_minutes == planned_minutes:
+        elif (planned_minutes - session_minutes <= 2.0 and (planned_minutes - session_minutes) / planned_minutes <= 0.25) or abs(session_minutes - planned_minutes) <= 0.1:
             session_status = "NEAR_PLAN"
         else:
             session_status = "WITHIN_PLAN"
@@ -150,7 +150,7 @@ class DecisionEngine:
             overrun = round(session_minutes - planned_minutes, 2)
             overrun_fmt = int(overrun) if (overrun == int(overrun)) else overrun
             overrun_msg = f"Over plan. {overrun_fmt} min over."
-            if message == "Usage is within normal limits." or "Over plan" not in message:
+            if (message == "Usage is within normal limits." or "Over plan" not in message) and current_category != "productive":
                 message = overrun_msg
             if not should_intervene:
                 if timer_result.get("solver_status") == "LEARNING" or timer_result.get("confidence", 1.0) < 0.2:
