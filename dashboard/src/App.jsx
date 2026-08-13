@@ -78,14 +78,80 @@ function DebugDashboard() {
 }
 
 export default function App() {
-  const path = typeof window !== "undefined" ? window.location.pathname : "/";
+  const [path, setPath] = useState(typeof window !== "undefined" ? window.location.pathname : "/");
 
-  if (path === "/dashboard/research") {
-    return <ResearchDashboard />;
-  }
-  if (path === "/dashboard/debug") {
-    return <DebugDashboard />;
-  }
+  const navigate = (newPath) => {
+    if (typeof window !== "undefined" && window.history) {
+      window.history.pushState({}, "", newPath);
+    }
+    setPath(newPath);
+  };
 
-  return <HabitGuardAvatar showDebug={false} />;
+  return (
+    <div>
+      <nav style={{
+        background: "#1e1e2e",
+        color: "#cdd6f4",
+        padding: "10px 24px",
+        display: "flex",
+        justify: "space-between",
+        alignItems: "center",
+        fontSize: "14px",
+        fontFamily: "system-ui, sans-serif"
+      }}>
+        <div style={{ fontWeight: 600, fontSize: "16px", color: "#cba6f7" }}>
+          🛡️ HabitGuard
+        </div>
+        <div style={{ display: "flex", gap: "16px" }}>
+          <button
+            onClick={() => navigate("/")}
+            style={{
+              background: path === "/" || path === "/dashboard" ? "#313244" : "transparent",
+              color: "#cdd6f4",
+              border: "none",
+              padding: "6px 14px",
+              borderRadius: "6px",
+              cursor: "pointer"
+            }}
+          >
+            Dashboard
+          </button>
+          <button
+            onClick={() => navigate("/dashboard/research")}
+            style={{
+              background: path === "/dashboard/research" ? "#313244" : "transparent",
+              color: "#cdd6f4",
+              border: "none",
+              padding: "6px 14px",
+              borderRadius: "6px",
+              cursor: "pointer"
+            }}
+          >
+            Research Portal
+          </button>
+          <button
+            onClick={() => navigate("/dashboard/debug")}
+            style={{
+              background: path === "/dashboard/debug" ? "#313244" : "transparent",
+              color: "#cdd6f4",
+              border: "none",
+              padding: "6px 14px",
+              borderRadius: "6px",
+              cursor: "pointer"
+            }}
+          >
+            Debug Mode
+          </button>
+        </div>
+      </nav>
+
+      {path === "/dashboard/research" ? (
+        <ResearchDashboard />
+      ) : path === "/dashboard/debug" ? (
+        <DebugDashboard />
+      ) : (
+        <HabitGuardAvatar showDebug={false} />
+      )}
+    </div>
+  );
 }

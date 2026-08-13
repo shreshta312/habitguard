@@ -84,3 +84,22 @@ class FeedbackRepository:
             }
         finally:
             conn.close()
+
+    def get_most_dismissed_sites(self, user_id: str, limit: int = 5) -> List[tuple]:
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT ts.domain, COUNT(*) as count 
+                   FROM feedback_events fe 
+                   JOIN technical_sessions ts ON fe.session_id = ts.session_id 
+                   WHERE fe.user_id = ? AND fe.action IN ('dismiss', 'overlay_dismissed', 'overlay_dismissed_by_user') 
+                   GROUP BY ts.domain 
+                   ORDER BY count DESC 
+                   LIMIT ?""",
+                (user_id, limit)
+            )
+            return [(row["domain"], row["count"]) for row in cur.fetchall()]
+        finally:
+            conn.close()
+

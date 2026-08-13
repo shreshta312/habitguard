@@ -46,13 +46,18 @@ def get_diagnostics():
     forecaster_model = _safe_load("usage_forecaster.pkl")
     segment_model = _safe_load("user_segmentation.pkl")
 
+    # Determine if model files exist on disk
+    models_dir = MODELS_DIR
+    def file_exists(name):
+        return (models_dir / name).exists()
+
     diagnostics = {
         "models_loaded": {
-            "anomaly_detector": anomaly_model is not None,
-            "anomaly_scaler": anomaly_scaler is not None,
-            "risk_classifier": risk_model is not None,
-            "usage_forecaster": forecaster_model is not None,
-            "user_segmentation": segment_model is not None,
+            "anomaly_detector": file_exists("anomaly_detector.pkl"),
+            "anomaly_scaler": file_exists("anomaly_scaler.pkl"),
+            "risk_classifier": file_exists("risk_classifier.pkl"),
+            "usage_forecaster": file_exists("usage_forecaster.pkl"),
+            "user_segmentation": file_exists("user_segmentation.pkl"),
         },
         "anomaly_detector": _anomaly_diagnostics(anomaly_model, anomaly_scaler),
         "risk_classifier": _risk_diagnostics(risk_model),

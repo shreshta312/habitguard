@@ -111,7 +111,7 @@ export default function UsageCharts({ weeklyTrend, domainBreakdown, accents, bas
                     strokeDasharray="6 4"
                     strokeWidth={1.5}
                     label={{
-                      value: `Baseline ${avgMinutes}m`,
+                      value: `Usual Usage ${avgMinutes}m`,
                       position: "insideTopRight",
                       fontSize: 10,
                       fill: accents.peach,

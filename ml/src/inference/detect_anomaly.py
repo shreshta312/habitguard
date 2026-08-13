@@ -3,8 +3,9 @@ import pandas as pd
 from pathlib import Path
 
 
-MODEL_PATH = Path("ml/saved_models/anomaly_detector.pkl")
-SCALER_PATH = Path("ml/saved_models/anomaly_scaler.pkl")
+BASE_DIR = Path(__file__).resolve().parents[3]
+MODEL_PATH = BASE_DIR / "ml" / "saved_models" / "anomaly_detector.pkl"
+SCALER_PATH = BASE_DIR / "ml" / "saved_models" / "anomaly_scaler.pkl"
 
 
 def load_model_and_scaler():

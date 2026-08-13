@@ -66,7 +66,7 @@ export async function fetchCanonicalUserDashboard(userId = "local_user") {
       goal,
       current: currentData,
       ml: mlData,
-      dashboard_ready: true
+      dashboard_ready: (summary.active_usage_minutes > 0) || (history.length > 0) || (Object.keys(platforms).length > 0)
     },
     todayTotalMinutes: summary.active_usage_minutes || 0,
     unplannedOveruseMinutes: summary.unplanned_overuse_minutes || 0,

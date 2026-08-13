@@ -116,7 +116,7 @@ def test_batch_endpoint_dead_code_integration():
 def test_diagnostics_endpoint():
     resp = client.get("/diagnostics").json()
     assert "models_loaded" in resp
-    assert "anomaly_detector" in resp["models_loaded"]
-    assert "risk_classifier" in resp["models_loaded"]
-    assert "usage_forecaster" in resp["models_loaded"]
-    assert "user_segmentation" in resp["models_loaded"]
+    assert resp["models_loaded"].get("anomaly_detector") is True
+    assert resp["models_loaded"].get("risk_classifier") is True
+    assert resp["models_loaded"].get("usage_forecaster") is True
+    assert resp["models_loaded"].get("user_segmentation") is True

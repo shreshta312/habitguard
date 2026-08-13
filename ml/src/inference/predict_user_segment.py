@@ -3,8 +3,9 @@ import pandas as pd
 from pathlib import Path
 
 
-MODEL_PATH = Path("ml/saved_models/user_segmentation.pkl")
-FEATURE_PATH = Path("data/processed/addiction_ml_features.csv")
+BASE_DIR = Path(__file__).resolve().parents[3]
+MODEL_PATH = BASE_DIR / "ml" / "saved_models" / "user_segmentation.pkl"
+FEATURE_PATH = BASE_DIR / "data" / "processed" / "addiction_ml_features.csv"
 
 
 def get_segment_name(row):
@@ -38,11 +39,12 @@ def predict_sample_segment():
 
     target_column = "addicted_label"
 
-    X = df.drop(columns=[target_column])
+    X = df.drop(columns=[target_column], errors="ignore")
 
     sample = X.iloc[[0]]
 
-    cluster = model.predict(sample)[0]
+    pipeline = model.get("pipeline", model) if isinstance(model, dict) else model
+    cluster = pipeline.predict(sample)[0]
 
     sample_row = sample.iloc[0]
     segment_name = get_segment_name(sample_row)

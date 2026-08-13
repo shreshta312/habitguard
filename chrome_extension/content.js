@@ -37,7 +37,7 @@ function startHabitGuardBreak(payload = {}, durationMinutes = 5) {
       </div>
 
       <p class="habitguard-note">
-        This break helps interrupt the current high-risk usage pattern.
+        This break helps you pause and reset your focus.
       </p>
 
       <div class="habitguard-actions single">
@@ -254,7 +254,7 @@ function createHabitGuardOverlay(payload) {
       </div>
 
       <p class="habitguard-note">
-        This intervention appears because your current session matches a high-risk usage pattern.
+        This reminder appears because your current usage has exceeded your planned limit.
       </p>
     </div>
   `;

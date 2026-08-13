@@ -88,9 +88,9 @@ class SessionsRepository:
             except Exception:
                 gap_minutes = 999.0
 
-            # Check if user explicitly provided a DIFFERENT non-default purpose/intended_minutes
-            is_explicit_new_plan = (purpose is not None and purpose not in (None, "unknown") and purpose != active_ep.get("purpose")) or \
-                                  (intended_minutes is not None and intended_minutes != active_ep.get("intended_minutes"))
+            old_intended = active_ep.get("intended_minutes")
+            intended_changed = (intended_minutes is not None and (old_intended is None or abs(float(intended_minutes) - float(old_intended)) > 1e-4))
+            is_explicit_new_plan = (purpose is not None and purpose not in (None, "unknown") and purpose != active_ep.get("purpose")) or intended_changed
 
             if gap_minutes <= SESSION_RESUME_GAP_MINUTES and active_ep.get("status") == "active" and not is_explicit_new_plan:
                 # Restore active episode
