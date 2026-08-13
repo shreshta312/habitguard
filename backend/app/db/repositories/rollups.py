@@ -40,7 +40,8 @@ class DailyUsageRollupsRepository:
                 )
             cur = conn.cursor()
             cur.execute("SELECT * FROM daily_usage_rollups WHERE user_id = ? AND local_date = ? AND domain = ?", (user_id, local_date, domain))
-            return dict(cur.fetchone())
+            row = cur.fetchone()
+            return dict(row) if row else {}
         finally:
             conn.close()
 

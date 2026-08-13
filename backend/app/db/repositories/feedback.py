@@ -71,7 +71,7 @@ class FeedbackRepository:
             
             total = sum(counts.values())
             dismiss_count = counts.get("dismiss", 0) + counts.get("overlay_dismissed", 0)
-            accept_count = counts.get("finish", 0) + counts.get("extend_5", 0) + counts.get("break_accepted", 0)
+            accept_count = counts.get("finish", 0) + counts.get("extend_5", 0) + counts.get("break_accepted", 0) + counts.get("break_completed", 0)
             
             return {
                 "total_events": total,

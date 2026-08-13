@@ -89,13 +89,13 @@ class DynamicLimitEngine:
         elif usage_percent < 130:
             return {
                 "level": "MEDIUM_COOLDOWN",
-                "message": "Usage is significantly above today's recommended limit.",
+                "message": "You've been online a bit longer than recommended today. How about a quick breather?",
                 "cooldown_seconds": 15
             }
 
         else:
             return {
                 "level": "STRONG_COOLDOWN",
-                "message": "Heavy usage detected. Pause before continuing.",
+                "message": "A mindful pause: You've had quite a bit of screen time today.",
                 "cooldown_seconds": 30
             }

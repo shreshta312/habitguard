@@ -125,19 +125,19 @@ class DecisionEngine:
                 friction_type = "SOFT_WARNING"
                 intervention_type = "REFLECTION_PROMPT"
                 should_intervene = True
-                message = "You've been on a temptation site for a while. Pause and check whether this is intentional."
+                message = "You've been active on this site for a while. Want to check in with your goals?"
             elif friction_type == "SOFT_WARNING":
                 usage_status = "TEMPTATION_OVERUSE"
                 friction_type = "TIMER_WARNING"
                 intervention_type = "TIMER_NUDGE"
                 should_intervene = True
-                message = "This temptation-site session is going beyond your usual pattern. A timer is recommended."
+                message = "This session is going a little beyond your usual pattern. Consider setting a mindful limit."
             elif overuse_gap >= 15:
                 usage_status = "RISKY_TEMPTATION_USAGE"
                 friction_type = "STRONG_FRICTION"
                 intervention_type = "ACTIVE_BLOCK"
                 should_intervene = True
-                message = "Heavy overuse on a temptation site."
+                message = "You've been browsing for quite a bit. How about taking a quick stretch or deep breath?"
             else:
                 intervention_type = self._intervention_type_from_friction(friction_type)
                 should_intervene = True
@@ -149,8 +149,8 @@ class DecisionEngine:
         if session_status == "OVER_PLAN":
             overrun = round(session_minutes - planned_minutes, 2)
             overrun_fmt = int(overrun) if (overrun == int(overrun)) else overrun
-            overrun_msg = f"Over plan. {overrun_fmt} min over."
-            if message == "Usage is within normal limits." or "Over plan" not in message:
+            overrun_msg = f"Mindful note: Over plan. {overrun_fmt} min over."
+            if message == "Usage looks steady and balanced." or "Over plan" not in message:
                 message = overrun_msg
             if not should_intervene:
                 if timer_result.get("solver_status") == "LEARNING" or timer_result.get("confidence", 1.0) < 0.2:
@@ -159,17 +159,8 @@ class DecisionEngine:
                     suppression_reason = "small_absolute_overrun"
                 elif current_category == "productive":
                     suppression_reason = "productive_context"
-                elif timer_result.get("cooldown_active"):
-                    suppression_reason = "cooldown"
                 else:
                     suppression_reason = "baseline_allowance"
-
-        if timer_result.get("cooldown_active"):
-            should_intervene = False
-            suppression_reason = "cooldown"
-            friction_type = "NONE"
-            message = "Intervention suppressed due to active cooldown."
-
         policy_score = clamp(0.5 * (overuse_gap / 30.0) + 0.5) if should_intervene else 0.0
 
         import uuid
@@ -225,13 +216,13 @@ class DecisionEngine:
 
     def _base_decision_from_overuse(self, overuse_gap: float):
         if overuse_gap <= 0:
-            return "STABLE", "NONE", "Usage is within normal limits."
+            return "STABLE", "NONE", "Usage looks steady and balanced."
         elif overuse_gap < 15:
-            return "SLIGHT_OVERUSE", "SOFT_WARNING", f"You have exceeded your baseline by {overuse_gap} minutes."
+            return "SLIGHT_OVERUSE", "SOFT_WARNING", f"Mindful note: You've spent a little longer than your baseline (by {overuse_gap} min)."
         elif overuse_gap < 30:
-            return "MODERATE_OVERUSE", "TIMER_WARNING", f"You have exceeded your baseline by {overuse_gap} minutes."
+            return "MODERATE_OVERUSE", "TIMER_WARNING", f"You're a bit past your usual baseline (by {overuse_gap} min). Want to wrap up soon?"
         else:
-            return "HEAVY_OVERUSE", "STRONG_FRICTION", f"You are significantly over your baseline ({overuse_gap} minutes)."
+            return "HEAVY_OVERUSE", "STRONG_FRICTION", f"You're significantly past your baseline ({overuse_gap} min). It might be a good time to rest your eyes."
 
     def _intervention_type_from_friction(self, friction_type: str):
         if friction_type == "SOFT_WARNING":

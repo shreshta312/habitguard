@@ -54,16 +54,21 @@ export default function InterventionCard({
 }) {
   return (
     <section className="hg-card mb-6 p-6 md:p-8">
-      <h3 className="hg-display mb-4 text-lg font-medium">Latest intervention</h3>
+      <h3 className="hg-display mb-4 text-lg font-medium flex items-center gap-2">
+        Latest Focus Insight
+        <span className="text-xs font-normal cursor-help" style={{ color: "var(--text-dim)" }} title="Derived from real-time utility optimization and baseline constraints.">
+          [?]
+        </span>
+      </h3>
 
       {!latestIntervention?.usage_status ? (
         <p className="text-sm" style={{ color: "var(--text-dim)" }}>
-          No latest intervention yet. This will update after the extension sends an
+          No latest focus insight yet. This will update after the extension sends an
           intervention result to the backend.
         </p>
       ) : (
         <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="text-sm">
               <strong>{latestIntervention.usage_status}</strong>
               {latestIntervention.message ? <> · {latestIntervention.message}</> : null}
@@ -75,7 +80,7 @@ export default function InterventionCard({
               </p>
             )}
 
-            {/* ── Limit Usage Tracker ── */}
+            {/* ── Focus Limit Tracker ── */}
             {(() => {
               const recent = toNumber(latestIntervention.recent_usage_minutes, 0);
               const baseline = toNumber(latestIntervention.baseline_usage_minutes, 0);
@@ -87,7 +92,7 @@ export default function InterventionCard({
               return (
                 <div className="mt-4 border-y py-3 space-y-2" style={{ borderColor: "var(--card-border)" }}>
                   <div className="flex justify-between text-xs" style={{ color: "var(--text-dim)" }}>
-                    <span>Limit Usage Tracker</span>
+                    <span>Focus Limit Tracker</span>
                     <span className="font-semibold" style={{ color: isOverLimit ? accents.peach : "var(--text)" }}>
                       {recent} min / {baseline} min limit
                     </span>
@@ -119,7 +124,6 @@ export default function InterventionCard({
 
                   <div className="flex justify-between text-[11px]" style={{ color: "var(--text-dim)" }}>
                     <span>Recent: {recent} min</span>
-                    <span>Rho calibration: {latestIntervention.rho_user ?? "Not available"}</span>
                     <span>Baseline: {baseline} min</span>
                   </div>
 
@@ -133,66 +137,73 @@ export default function InterventionCard({
               );
             })()}
 
-            {/* ── JITAI Delivery Policy ── */}
-            <div
-              className="mt-4 flex flex-wrap items-center gap-3 border-t pt-3 text-xs"
-              style={{ borderColor: "var(--card-border)", color: "var(--text-dim)" }}
-            >
-              <div className="flex items-center gap-1.5">
-                {latestIntervention.should_notify ? (
-                  <Bell size={12} style={{ color: accents.peach }} />
-                ) : (
-                  <BellOff size={12} />
-                )}
-                <span>
-                  Notify:{" "}
-                  <strong style={{ color: latestIntervention.should_notify ? accents.peach : "var(--text)" }}>
-                    {latestIntervention.should_notify ? "Yes" : "No"}
-                  </strong>
-                </span>
-              </div>
+            {/* ── Advanced / Researcher details Collapsible ── */}
+            <details className="mt-4 border-t pt-3" style={{ borderColor: "var(--card-border)" }}>
+              <summary className="cursor-pointer select-none text-[11px] font-semibold hover:underline" style={{ color: "var(--text-dim)" }}>
+                Advanced Diagnostics & JITAI Metrics
+              </summary>
+              <div className="mt-3 space-y-3">
+                <div className="flex flex-wrap items-center gap-4 text-xs" style={{ color: "var(--text-dim)" }}>
+                  <div className="flex items-center gap-1.5">
+                    {latestIntervention.should_notify ? (
+                      <Bell size={12} style={{ color: accents.peach }} />
+                    ) : (
+                      <BellOff size={12} />
+                    )}
+                    <span>
+                      Notify:{" "}
+                      <strong style={{ color: latestIntervention.should_notify ? accents.peach : "var(--text)" }}>
+                        {latestIntervention.should_notify ? "Yes" : "No"}
+                      </strong>
+                    </span>
+                  </div>
 
-              <div className="flex items-center gap-1.5">
-                <Layers size={12} />
-                <span>
-                  Overlay:{" "}
-                  <strong style={{ color: latestIntervention.should_overlay ? accents.peach : "var(--text)" }}>
-                    {latestIntervention.should_overlay ? "Yes" : "No"}
-                  </strong>
-                </span>
-              </div>
+                  <div className="flex items-center gap-1.5">
+                    <Layers size={12} />
+                    <span>
+                      Overlay:{" "}
+                      <strong style={{ color: latestIntervention.should_overlay ? accents.peach : "var(--text)" }}>
+                        {latestIntervention.should_overlay ? "Yes" : "No"}
+                      </strong>
+                    </span>
+                  </div>
 
-              {latestIntervention.cooldown_minutes !== undefined && (
-                <div className="flex items-center gap-1.5">
-                  <Timer size={12} />
-                  <span>
-                    Cooldown:{" "}
-                    <strong style={{ color: "var(--text)" }}>
-                      {latestIntervention.cooldown_minutes} min
-                    </strong>
-                  </span>
+                  {latestIntervention.cooldown_minutes !== undefined && (
+                    <div className="flex items-center gap-1.5">
+                      <Timer size={12} />
+                      <span>
+                        Cooldown:{" "}
+                        <strong style={{ color: "var(--text)" }}>
+                          {latestIntervention.cooldown_minutes} min
+                        </strong>
+                      </span>
+                    </div>
+                  )}
+
+                  {latestIntervention.friction_type && (
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                        style={{
+                          background: `${frictionAccent(accents, latestIntervention.friction_type)}2A`,
+                          color: frictionAccent(accents, latestIntervention.friction_type),
+                        }}
+                      >
+                        Friction: {latestIntervention.friction_type}
+                      </span>
+                    </div>
+                  )}
                 </div>
-              )}
 
-              {latestIntervention.delivery_reason && (
-                <p className="mt-1 w-full leading-relaxed" style={{ opacity: 0.75 }}>
-                  {latestIntervention.delivery_reason}
-                </p>
-              )}
-            </div>
+                <div className="grid gap-1.5 text-[11px] hg-mono" style={{ color: "var(--text-dim)" }}>
+                  <div><span>Autocorrelation (Rho):</span> <strong style={{ color: "var(--text)" }}>{latestIntervention.rho_user ?? "Not available"}</strong></div>
+                  {latestIntervention.delivery_reason && (
+                    <div><span>Delivery Logic:</span> <span style={{ color: "var(--text)" }}>{latestIntervention.delivery_reason}</span></div>
+                  )}
+                </div>
+              </div>
+            </details>
           </div>
-
-          {latestIntervention.friction_type && (
-            <span
-              className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium"
-              style={{
-                background: `${frictionAccent(accents, latestIntervention.friction_type)}2A`,
-                color: frictionAccent(accents, latestIntervention.friction_type),
-              }}
-            >
-              {latestIntervention.friction_type}
-            </span>
-          )}
         </div>
       )}
     </section>

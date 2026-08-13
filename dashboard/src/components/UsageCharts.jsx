@@ -50,7 +50,7 @@ function barColor(minutes, baseline, accents) {
   return accents.yellow;                      // over baseline — alert
 }
 
-export default function UsageCharts({ weeklyTrend, domainBreakdown, accents, baselineMinutes }) {
+export default function UsageCharts({ weeklyTrend, domainBreakdown, accents, baselineMinutes, summary }) {
   const avgMinutes =
     baselineMinutes ||
     (weeklyTrend.length > 0
@@ -190,6 +190,83 @@ export default function UsageCharts({ weeklyTrend, domainBreakdown, accents, bas
           )}
         </div>
       </div>
+
+      {/* ── Focus vs Distraction Breakdown ── */}
+      {summary && (
+        <div className="hg-card p-6 md:col-span-2">
+          <h3 className="hg-display mb-2 text-lg font-medium">Focus vs Distraction Breakdown</h3>
+          <p className="text-xs mb-4" style={{ color: "var(--text-dim)" }}>
+            A comparison of your intended focus sessions against distracted or uncategorized screen time today.
+          </p>
+          {(() => {
+            const planned = summary.planned_minutes || 0;
+            const unplanned = summary.unplanned_overuse_minutes || 0;
+            const unknown = summary.unknown_minutes || 0;
+            const total = planned + unplanned + unknown;
+
+            if (total <= 0) {
+              return (
+                <p className="text-sm italic" style={{ color: "var(--text-dim)" }}>
+                  No active screen time usage recorded today yet.
+                </p>
+              );
+            }
+
+            const plannedPct = Math.round((planned / total) * 100);
+            const unplannedPct = Math.round((unplanned / total) * 100);
+            const unknownPct = 100 - plannedPct - unplannedPct;
+
+            return (
+              <div className="space-y-4">
+                <div className="flex h-5 w-full rounded-full overflow-hidden" style={{ background: "rgba(148, 163, 184, 0.12)" }}>
+                  {planned > 0 && (
+                    <div
+                      style={{ width: `${plannedPct}%`, background: accents.mint }}
+                      title={`Intended Focus: ${planned} min (${plannedPct}%)`}
+                      className="h-full flex items-center justify-center text-[10px] font-bold text-white transition-all"
+                    >
+                      {plannedPct >= 10 ? `${plannedPct}%` : ""}
+                    </div>
+                  )}
+                  {unplanned > 0 && (
+                    <div
+                      style={{ width: `${unplannedPct}%`, background: accents.peach }}
+                      title={`Distracted Overuse: ${unplanned} min (${unplannedPct}%)`}
+                      className="h-full flex items-center justify-center text-[10px] font-bold text-white transition-all"
+                    >
+                      {unplannedPct >= 10 ? `${unplannedPct}%` : ""}
+                    </div>
+                  )}
+                  {unknown > 0 && (
+                    <div
+                      style={{ width: `${unknownPct}%`, background: accents.yellow }}
+                      title={`Uncategorized: ${unknown} min (${unknownPct}%)`}
+                      className="h-full flex items-center justify-center text-[10px] font-bold text-white transition-all"
+                    >
+                      {unknownPct >= 10 ? `${unknownPct}%` : ""}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap justify-between gap-4 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-3 w-3 rounded-full" style={{ background: accents.mint }} />
+                    <span>Intended Focus: <strong>{planned} min</strong> ({plannedPct}%)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-3 w-3 rounded-full" style={{ background: accents.peach }} />
+                    <span>Distracted Category: <strong>{unplanned} min</strong> ({unplannedPct}%)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-3 w-3 rounded-full" style={{ background: accents.yellow }} />
+                    <span>Uncategorized: <strong>{unknown} min</strong> ({unknownPct}%)</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
     </section>
   );
 }

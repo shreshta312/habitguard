@@ -200,9 +200,9 @@ function getDisplayName() {
 
 // ── Small internal components ────────────────────────────────────────────────
 
-function StatCard({ icon: Icon, label, value, accent }) {
+function StatCard({ icon: Icon, label, value, accent, tooltip }) {
   return (
-    <div className="hg-card flex flex-col gap-2 p-4">
+    <div className="hg-card flex flex-col gap-2 p-4 cursor-help" title={tooltip}>
       <div
         className="flex items-center justify-center rounded-full"
         style={{ width: 30, height: 30, background: `${accent}2A`, color: accent }}
@@ -501,10 +501,10 @@ export default function HabitGuardDashboard({ showDebug = false }) {
 
         {/* ── Stat Cards ── */}
         <section className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
-          <StatCard icon={Clock} label="Screen Time" value={formatMinutes(liveUsage.screenTimeMinutes)} accent={accents.mint} />
-          <StatCard icon={TrendingUp} label="Overuse Gap" value={formatSignedMinutes(overuseGap)} accent={accents.mint} />
-          <StatCard icon={Timer} label="Suggested Timer" value={formatMinutes(recommendedTimer, "Not active")} accent={accents.mint} />
-          <StatCard icon={Activity} label="Decision Checks" value={String(totalInterventions)} accent={accents.mint} />
+          <StatCard icon={Clock} label="Tracked Screen Time" value={formatMinutes(liveUsage.screenTimeMinutes)} accent={accents.mint} tooltip="Total tracked browsing time on monitored distracting domains today." />
+          <StatCard icon={TrendingUp} label="Overuse Gap" value={formatSignedMinutes(overuseGap)} accent={accents.mint} tooltip="How many minutes you are currently over your baseline trend limit today." />
+          <StatCard icon={Timer} label="Focus Timer" value={formatMinutes(recommendedTimer, "Not active")} accent={accents.mint} tooltip="Mindful focus timer suggested by real-time utility calculations." />
+          <StatCard icon={Activity} label="Active Checks" value={String(totalInterventions)} accent={accents.mint} tooltip="Total automated evaluation checks performed by HabitGuard today." />
         </section>
 
         {/* ── Charts ── */}
@@ -513,6 +513,7 @@ export default function HabitGuardDashboard({ showDebug = false }) {
           domainBreakdown={domainBreakdown}
           accents={accents}
           baselineMinutes={toNumber(latestIntervention?.baseline_usage_minutes)}
+          summary={raw.summary}
         />
 
         {/* ── ML Insights ── */}
@@ -615,7 +616,10 @@ export default function HabitGuardDashboard({ showDebug = false }) {
         {/* ── Model Diagnostics ── */}
         {showDebug && <DiagnosticsPanel />}
 
-        <p className="hg-mono mt-8 text-center text-xs" style={{ color: "var(--text-dim)" }}>
+        <p className="mt-8 text-center text-[11px]" style={{ color: "var(--text-dim)", opacity: 0.8 }}>
+          🔒 <strong>Privacy First:</strong> All browsing analysis is performed locally on your device. No browsing history is sent to external servers.
+        </p>
+        <p className="hg-mono mt-2 text-center text-xs" style={{ color: "var(--text-dim)" }}>
           HabitGuard · JITAI-based intervention · live backend dashboard
         </p>
       </div>

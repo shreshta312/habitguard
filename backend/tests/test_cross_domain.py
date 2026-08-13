@@ -165,11 +165,11 @@ class TestSiteSubstitution:
         for i in range(n):
             d = (today - timedelta(days=i)).isoformat()
             rollups.append(_make_rollup_dated("youtube.com",   focused=20, local_date=d))
-            rollups.append(_make_rollup_dated("instagram.com", focused=22, local_date=d))
-        # Reference period: both present; delta is only 2 min (<< MEANINGFUL_CHANGE_MINUTES=10)
+            rollups.append(_make_rollup_dated("instagram.com", focused=21, local_date=d))
+        # Reference period: both present; delta is only 1 min (total change 7 min < 10)
         for i in range(n):
             d = (today - timedelta(days=n + i)).isoformat()
-            rollups.append(_make_rollup_dated("youtube.com",   focused=22, local_date=d))
+            rollups.append(_make_rollup_dated("youtube.com",   focused=21, local_date=d))
             rollups.append(_make_rollup_dated("instagram.com", focused=20, local_date=d))
 
         rollups_repo = MagicMock()

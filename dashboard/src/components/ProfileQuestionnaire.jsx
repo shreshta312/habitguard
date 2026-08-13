@@ -261,7 +261,7 @@ export default function ProfileQuestionnaire({
                   className="mb-1 text-xs font-semibold uppercase tracking-wider"
                   style={{ color: "var(--text-dim)" }}
                 >
-                  Addiction Risk Level
+                  Habit Risk Category
                 </p>
 
                 <span

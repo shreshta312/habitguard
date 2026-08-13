@@ -79,7 +79,7 @@ class FeedbackService:
 
         user_id    = payload.get("user_id", "local_user")
         action     = payload.get("event_type") or payload.get("action") or "dismiss"
-        session_id = payload.get("session_id", "legacy_session")
+        session_id = payload.get("session_id") or "legacy_session"
 
         recorded = self.record_action(
             session_id=session_id,

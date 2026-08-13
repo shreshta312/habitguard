@@ -59,11 +59,11 @@ let countdownInterval = null;
 
 // Purpose label map: maps backend intent purpose enum to display labels
 const PURPOSE_LABELS = {
-  "work_study":        "Study",
-  "necessary":         "Necessary",
-  "entertainment":     "Entertainment",
-  "habitual_browsing": "Browsing",
-  "no_timer":          "No timer",
+  "work_study":        "Study (Focus)",
+  "necessary":         "Necessary (Focus)",
+  "entertainment":     "Entertainment (Temptation)",
+  "habitual_browsing": "Browsing (Mixed)",
+  "no_timer":          "No Timer (Passive)",
   "unknown":           "Unknown"
 };
 
@@ -502,7 +502,12 @@ async function analyzeUsage() {
     }
 
     if (!data) {
-      throw new Error("No active session response received from backend. Verify active browser tab and FastAPI backend status.");
+      usageStatusEl.textContent  = "NO ACTIVE SITE";
+      frictionTypeEl.textContent = "Not active";
+      timerEl.textContent        = "Not active";
+      usageDetailsEl.textContent = "Browse to a website to begin tracking.";
+      messageEl.textContent      = "No active session on this tab. Chrome internal pages (like chrome://) cannot be tracked.";
+      return;
     }
 
     const checkedAt = Date.now();

@@ -17,8 +17,11 @@ def _safe_load(name):
     path = MODELS_DIR / name
     if not path.exists():
         return None
-    with open(path, "rb") as f:
-        return pickle.load(f)
+    try:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    except Exception:
+        return None
 
 
 def _model_type(model):

@@ -325,6 +325,17 @@ async function _doReconcileActiveSession(reason) {
         intendedMinutes: data.intent?.effective_planned_minutes ?? data.intent?.original_intended_minutes ?? data.intent?.intended_minutes ?? null
       };
 
+      // Restore local session state if backend resumed the same episode
+      // (e.g. user briefly switched tabs and came back within SESSION_RESUME_GAP_MINUTES)
+      if (newSession.episode_id && updatedHistory.length > 0) {
+        const prevSession = updatedHistory.find(s => s.episode_id === newSession.episode_id && s.domain === activeDomain);
+        if (prevSession) {
+          newSession.startedAt = prevSession.startedAt || now;
+          newSession.sessionMinutes = prevSession.sessionMinutes || prevSession.durationMinutes || 0;
+          console.log(`[HabitGuard] session state restored from closed session (episode ${newSession.episode_id}, ${newSession.sessionMinutes} min preserved)`);
+        }
+      }
+
       await chrome.storage.local.set({
         currentSession: newSession,
         sessionHistory: updatedHistory
@@ -1368,9 +1379,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "PROCESS_DECISION") {
-    showInterventionNotification(message.decision).then(() => {
-      sendResponse({ status: "processed" });
-    });
+    showInterventionNotification(message.decision)
+      .then(() => sendResponse({ status: "processed" }))
+      .catch((err) => {
+        console.error("HabitGuard notification failed:", err);
+        sendResponse({ status: "error", error: String(err) });
+      });
     return true;
   }
 

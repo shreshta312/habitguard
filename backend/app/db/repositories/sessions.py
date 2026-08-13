@@ -349,7 +349,8 @@ class SessionsRepository:
                 )
             cur = conn.cursor()
             cur.execute("SELECT * FROM session_outcomes WHERE session_id = ?", (session_id,))
-            return dict(cur.fetchone())
+            row = cur.fetchone()
+            return dict(row) if row else {}
         finally:
             conn.close()
 

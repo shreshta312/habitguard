@@ -478,10 +478,10 @@ def add_activity_batch(session_id: str, req: BatchActivityRequest):
     domain  = session["domain"]
 
     track_res    = usage_tracker.process_activities(session_id, user_id, domain, req.activities)
-    if track_res["events_rejected"] > 0 and len(req.activities) > 0 and track_res["events_added"] == 0:
+    if track_res["events_rejected"] == len(req.activities) and len(req.activities) > 0:
         raise HTTPException(
             status_code=400,
-            detail="Invalid activity timestamp or duration: event predates session start, is in future beyond tolerance, or has invalid duration."
+            detail="All activities in batch were invalid (timestamp out of range or invalid duration)."
         )
 
     intent                 = session.get("intent") or {}

@@ -239,7 +239,8 @@ def test_22_and_23_cooldown_suppression():
         "cooldown_active": True
     }
     dec = engine.decide(timer_res, context={"session_minutes": 35, "planned_minutes": 15, "current_domain": "youtube.com"})
-    assert dec["suppression_reason"] == "cooldown" or not dec["should_intervene"]
+    assert dec["should_intervene"] is True
+    assert dec["suppression_reason"] is None
 
 
 def test_30_entertainment_not_finished_does_not_inflate_duration(tmp_path, monkeypatch):

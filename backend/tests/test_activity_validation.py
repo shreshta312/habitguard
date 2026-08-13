@@ -72,7 +72,7 @@ def test_endpoint_returns_400_for_past_event():
         }]
     })
     assert bad_res.status_code == 400
-    assert "Invalid activity timestamp" in bad_res.json()["detail"]
+    assert "All activities in batch were invalid" in bad_res.json()["detail"]
 
 
 def test_reject_implausibly_future_events(tracker_and_intent):

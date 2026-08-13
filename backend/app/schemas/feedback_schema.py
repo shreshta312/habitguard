@@ -19,4 +19,9 @@ class FeedbackEvent(BaseModel):
 
     timestamp: Optional[str] = None
 
+    # These fields are required for tracking but were dropped by Pydantic
+    session_id: Optional[str] = None
+    task_completion: Optional[str] = None
+    time_sufficient: Optional[str] = None
+
     context: Dict[str, Any] = {}

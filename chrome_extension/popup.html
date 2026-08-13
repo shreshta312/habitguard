@@ -31,7 +31,7 @@
     </div>
 
     <div class="card">
-      <p class="label">Today's Tracked Usage</p>
+      <p class="label">Tracked Screen Time</p>
       <p id="todayUsage" class="value">Loading...</p>
     </div>
 
@@ -48,13 +48,13 @@
     <div class="card small-card" id="intentCard">
       <p class="label">Set Session Intent</p>
       <div class="intent-controls">
-        <select id="intentPurpose" aria-label="Session purpose">
-          <option value="" selected>Select purpose…</option>
-          <option value="work_study">Study</option>
-          <option value="necessary">Necessary</option>
-          <option value="entertainment">Entertainment</option>
-          <option value="habitual_browsing">Browsing</option>
-          <option value="no_timer">No timer</option>
+        <select id="intentPurpose" aria-label="Session category">
+          <option value="" selected>Select category…</option>
+          <option value="work_study">Study (Focus Category)</option>
+          <option value="necessary">Necessary (Focus Category)</option>
+          <option value="entertainment">Entertainment (Temptation Category)</option>
+          <option value="habitual_browsing">Browsing (Mixed Category)</option>
+          <option value="no_timer">No Timer (Passive Tracking)</option>
         </select>
         <input id="intentMinutes" type="number" min="1" max="480" placeholder="Minutes" aria-label="Intended minutes" />
         <button id="setIntentBtn">Set Intent</button>
@@ -78,25 +78,29 @@
     </details>
 
     <div class="card">
-      <p class="label">Status</p>
+      <p class="label">Habit Status</p>
       <p id="usageStatus" class="value">Waiting...</p>
     </div>
 
-    <div class="card" style="display:none">
-      <p class="label">Friction</p>
-      <p id="frictionType" class="value">Waiting...</p>
-    </div>
-
     <div class="card">
-      <p class="label">Remaining</p>
+      <p class="label">Focus Timer</p>
       <p id="timer" class="value">Waiting...</p>
     </div>
 
-    <div class="card small-card" id="deliveryCard" style="display:none">
-      <p class="label">JITAI Delivery Policy</p>
-      <p id="deliveryDetails" class="details"></p>
-      <p id="deliveryReason" class="details" style="opacity:0.7;margin-top:4px"></p>
-    </div>
+    <details class="card small-card site-settings-details">
+      <summary class="label" style="cursor:pointer;user-select:none;outline:none;">Developer Diagnostics <span style="font-weight:normal;opacity:0.7;">(Advanced logs)</span></summary>
+      <div style="margin-top:8px;">
+        <div class="card" style="margin:6px 0; padding:10px; background:rgba(0,0,0,0.03);">
+          <p class="label">Friction Level</p>
+          <p id="frictionType" class="value" style="font-size:14px; margin:4px 0 0 0;">Waiting...</p>
+        </div>
+        <div class="card small-card" id="deliveryCard" style="margin:6px 0; padding:10px; background:rgba(0,0,0,0.03); display:none">
+          <p class="label">JITAI Delivery Policy</p>
+          <p id="deliveryDetails" class="details" style="font-size:11px; font-family: monospace;"></p>
+          <p id="deliveryReason" class="details" style="opacity:0.7;margin-top:4px; font-size:11px;"></p>
+        </div>
+      </div>
+    </details>
 
     <div class="card small-card">
       <p class="label">Intervention Action</p>
@@ -111,12 +115,16 @@
     </div>
 
     <div class="card small-card">
-      <p class="label">Used / Planned / Over</p>
+      <p class="label">Session Usage Breakdown</p>
       <p id="usageDetails" class="details">Waiting for analysis...</p>
     </div>
 
     <p id="message" class="message">
       Browse for a few minutes, then analyze your live Chrome usage.
+    </p>
+
+    <p class="privacy-note" style="font-size:10px; text-align:center; color:var(--text-dim); opacity:0.75; margin:16px 0 0 0; line-height:1.4;">
+      🔒 <strong>Privacy First:</strong> All browsing analysis is performed locally on your device. No browsing history is sent to external servers.
     </p>
   </div>
 
