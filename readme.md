@@ -31,19 +31,19 @@ HabitGuard is divided into three distinct layers: the Client (Chrome Extension &
 ```mermaid
 flowchart TD
     subgraph Client ["Client Side (User Browser)"]
-        CE[Chrome Extension\n- Tracks active tabs\n- Heartbeat sync\n- Renders overlays]
-        DB_Local[(Local Storage\nOffline Queue)]
+        CE["Chrome Extension\n- Tracks active tabs\n- Heartbeat sync\n- Renders overlays"]
+        DB_Local[("Local Storage\nOffline Queue")]
         CE <--> DB_Local
-        Dash[React Dashboard\n- Visualizes usage\n- Displays ML insights]
+        Dash["React Dashboard\n- Visualizes usage\n- Displays ML insights"]
     end
 
     subgraph Backend ["FastAPI Backend"]
-        API[API Router\n/sessions, /usage, /jitai]
+        API["API Router\n/sessions, /usage, /jitai"]
         
         subgraph CoreServices ["Core Logic Engines"]
-            DE[Decision Engine\nEvaluates current session]
-            STE[Structural Timer Engine\nCalculates Habit Stock]
-            CDG[Cross-Domain Goal Service\nMonitors app substitution]
+            DE["Decision Engine\nEvaluates current session"]
+            STE["Structural Timer Engine\nCalculates Habit Stock"]
+            CDG["Cross-Domain Goal Service\nMonitors app substitution"]
         end
         
         API --> DE
@@ -52,8 +52,8 @@ flowchart TD
     end
 
     subgraph DataML ["Data & ML Layer"]
-        DB_SQL[(SQLite Database\n- Sessions\n- Interventions\n- Rollups)]
-        ML[ML Models\n- Anomaly Detection\n- Addiction Scoring]
+        DB_SQL[("SQLite Database\n- Sessions\n- Interventions\n- Rollups")]
+        ML["ML Models\n- Anomaly Detection\n- Addiction Scoring"]
     end
 
     CE -- "Heartbeats & Feedback" --> API
@@ -184,22 +184,22 @@ flowchart TD
     classDef engine fill:#85c1e9,stroke:#333,stroke-width:2px,color:#2c3e50
     classDef db fill:#f9ebea,stroke:#333,stroke-width:2px,color:#2c3e50
 
-    API[app/api/routers/\nFastAPI Endpoints]:::entry
+    API["app/api/routers/\nFastAPI Endpoints"]:::entry
     
-    HS[habitguard_service.py\nMain Orchestrator]:::orchestrator
+    HS["habitguard_service.py\nMain Orchestrator"]:::orchestrator
     
     subgraph Services ["Backend Core Services"]
         direction TB
-        DE[decision_engine.py\nCore Rules & Intervention Thresholds]:::engine
-        STE[structural_timer_engine.py\nMacro Daily Limit Math]:::engine
-        SOE[session_optimization_engine.py\nMicro Session Timer Math]:::engine
-        CDG[cross_domain_goal_service.py\nApp Substitution Tracking]:::engine
-        CBS[contextual_baseline_service.py\n14-Day Usage Averages]:::engine
-        DLE[dynamic_limit_engine.py\nAddiction Ratcheting Logic]:::engine
-        PAS[personal_adaptation_service.py\nFeedback Acceptance Rates]:::engine
+        DE["decision_engine.py\nCore Rules & Intervention Thresholds"]:::engine
+        STE["structural_timer_engine.py\nMacro Daily Limit Math"]:::engine
+        SOE["session_optimization_engine.py\nMicro Session Timer Math"]:::engine
+        CDG["cross_domain_goal_service.py\nApp Substitution Tracking"]:::engine
+        CBS["contextual_baseline_service.py\n14-Day Usage Averages"]:::engine
+        DLE["dynamic_limit_engine.py\nAddiction Ratcheting Logic"]:::engine
+        PAS["personal_adaptation_service.py\nFeedback Acceptance Rates"]:::engine
     end
     
-    DB[db/database.py & repositories/\nSQLite Storage]:::db
+    DB["db/database.py & repositories/\nSQLite Storage"]:::db
 
     API --> |Receives Requests| HS
     
