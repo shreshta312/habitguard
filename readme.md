@@ -86,8 +86,8 @@ flowchart TD
     classDef outputBlock fill:#d5f5e3,stroke:#27ae60,stroke-width:2px,color:#2c3e50
 
     subgraph DailyData ["1. Historical Data (Database)"]
-        H1[Daily Usage Rollups\n(Past 14 Days)]:::dbBlock
-        H2[Past Intervention Feedback\n(Accept/Reject Rates)]:::dbBlock
+        H1["Daily Usage Rollups\n(Past 14 Days)"]:::dbBlock
+        H2["Past Intervention Feedback\n(Accept/Reject Rates)"]:::dbBlock
     end
 
     subgraph MacroEngine ["2. StructuralTimerEngine (Daily Limit)"]
