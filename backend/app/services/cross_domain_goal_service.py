@@ -218,7 +218,7 @@ class CrossDomainGoalService:
         # Fetch double window to get two periods
         all_rollups = self.repo.get_user_rollups(user_id, days=days * 2 + 4)
         today = datetime.now(timezone.utc).date()
-        current_start = today - timedelta(days=days - 1)
+        current_start = today - timedelta(days=days)
         reference_start = current_start - timedelta(days=days)
 
         curr_totals: Dict[str, float] = {}
