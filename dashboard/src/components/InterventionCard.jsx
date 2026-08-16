@@ -70,15 +70,25 @@ export default function InterventionCard({
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <p className="text-sm">
-              <strong>{latestIntervention.usage_status}</strong>
+              <strong>
+                {{
+                  "RISKY_TEMPTATION_USAGE": "High Overuse",
+                  "TEMPTATION_OVERUSE": "Moderate Overuse",
+                  "TEMPTATION_SESSION": "Temptation Browsing",
+                  "STABLE_PRODUCTIVE": "Steady & Productive",
+                  "PRODUCTIVE_CONTEXT": "Productive Usage",
+                  "STABLE": "Steady Usage",
+                  "SLIGHT_OVERUSE": "Slight Overuse",
+                  "MODERATE_OVERUSE": "Moderate Overuse",
+                  "HEAVY_OVERUSE": "Heavy Overuse",
+                  "INSUFFICIENT_DATA": "Not Enough Data",
+                  "COLLECTING_BASELINE": "Learning Your Baseline"
+                }[latestIntervention.usage_status] || latestIntervention.usage_status.replace(/_/g, " ")}
+              </strong>
               {latestIntervention.message ? <> · {latestIntervention.message}</> : null}
             </p>
 
-            {latestIntervention.decision_reason && (
-              <p className="hg-mono mt-2 text-xs leading-relaxed" style={{ color: "var(--text-dim)" }}>
-                {latestIntervention.decision_reason}
-              </p>
-            )}
+            {/* Internal decision_reason hidden from user view */}
 
             {/* ── Focus Limit Tracker ── */}
             {(() => {
@@ -189,16 +199,14 @@ export default function InterventionCard({
                           color: frictionAccent(accents, latestIntervention.friction_type),
                         }}
                       >
-                        Friction: {latestIntervention.friction_type}
+                        Friction: {{
+                          "STRONG_FRICTION": "Strong Reminder",
+                          "TIMER_WARNING": "Timer Recommendation",
+                          "SOFT_WARNING": "Gentle Check-in",
+                          "NONE": "Normal"
+                        }[latestIntervention.friction_type] || latestIntervention.friction_type}
                       </span>
                     </div>
-                  )}
-                </div>
-
-                <div className="grid gap-1.5 text-[11px] hg-mono" style={{ color: "var(--text-dim)" }}>
-                  <div><span>Autocorrelation (Rho):</span> <strong style={{ color: "var(--text)" }}>{latestIntervention.rho_user ?? "Not available"}</strong></div>
-                  {latestIntervention.delivery_reason && (
-                    <div><span>Delivery Logic:</span> <span style={{ color: "var(--text)" }}>{latestIntervention.delivery_reason}</span></div>
                   )}
                 </div>
               </div>
