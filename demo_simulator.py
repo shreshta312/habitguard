@@ -134,11 +134,11 @@ def scenario_3_over_plan_strong_friction():
     sid = s["session_id"]
     print(f"-> Started 15-min session '{sid}' on youtube.com for 'entertainment'")
 
-    # Add 22 minutes of usage (exceeding 15 min plan by 7 mins)
+    # Add 32 minutes of usage (exceeding 15 min plan by 17 mins)
     act = client.post(f"/sessions/{sid}/activity/batch", json={
         "activities": [{
             "client_event_id": f"evt_s3_{time.time()}",
-            "focused_duration_ms": 1320000, # 22 mins
+            "focused_duration_ms": 1920000, # 32 mins
             "event_timestamp_utc": ts_utc(),
         }]
     }).json()
