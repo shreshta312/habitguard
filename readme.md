@@ -195,6 +195,7 @@ flowchart TD
         SOE["session_optimization_engine.py\nMicro Session Timer Math"]:::engine
         CDG["cross_domain_goal_service.py\nApp Substitution Tracking"]:::engine
         CBS["contextual_baseline_service.py\n14-Day Usage Averages"]:::engine
+        ADE["addiction_engine.py\nCalculates Addiction Score"]:::engine
         DLE["dynamic_limit_engine.py\nAddiction Ratcheting Logic"]:::engine
         PAS["personal_adaptation_service.py\nFeedback Acceptance Rates"]:::engine
     end
@@ -211,6 +212,8 @@ flowchart TD
     DE --> |Fetches Micro Nudge| SOE
     DE --> |Adjusts for Feedback| PAS
     
+    ADE --> |Reads History| DB
+    ADE --> |Passes Score to| DLE
     STE --> |Gets Penalty Factor| DLE
     
     DE --> |Logs Result| DB
